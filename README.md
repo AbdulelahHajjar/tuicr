@@ -113,6 +113,23 @@ reviewed state.
 Auto-detects git, jj, or mercurial. SHA-256 Git repositories automatically use the Git CLI backend,
 including when reviewing root commits; ordinary SHA-1 repositories still default to libgit2.
 
+## Local pull requests
+
+`tuicr pr` reviews the current branch against the repository's default branch without a remote
+service. Pass a branch to review it instead, or `--base <ref>` to choose the base. Reviews and
+threads live in tuicr's data directory. The backend never calls a forge CLI or the network and
+never writes inside the checkout. It follows new commits on the head branch automatically. In the
+Pull Requests tab, press `l` to switch between Forge and Local branches. Use `:resolve` and
+`:unresolve` on a thread selected in the comment navigator or under the diff cursor.
+
+| Command | Action |
+|---------|--------|
+| `tuicr pr` | Review the current branch as a local pull request |
+| `tuicr pr <branch>` | Review another local branch |
+| `tuicr pr --base <ref> [<branch>]` | Override the local pull request's base reference |
+| `:resolve` | Resolve the thread at the cursor |
+| `:unresolve` | Reopen the thread at the cursor |
+
 ## How it compares
 
 | | tuicr | [hunk](https://github.com/modem-dev/hunk) | [lumen](https://github.com/jnsahaj/lumen) | `gh pr review` | `git diff` |
@@ -147,22 +164,6 @@ When you're done reviewing, send your comments wherever the work continues.
 `:submit` opens a picker for Comment, Approve, Request changes, or Draft. Inline comments land
 on the right lines as a real PR review. Review-level comments become the review summary.
 Requires `gh` authenticated to the repo.
-
-### Local pull requests
-
-`tuicr pr` reviews the current branch against the repository's default branch without a remote
-service. Pass a branch to review it instead, or `--base <ref>` to choose the base. Reviews and
-threads live in tuicr's data directory; the backend never shells out or writes inside the checkout.
-It follows new commits on the head branch automatically. Use `:resolve` and `:unresolve` on a
-thread selected in the comment navigator or under the diff cursor.
-
-| Command | Action |
-|---------|--------|
-| `tuicr pr` | Review the current branch as a local pull request |
-| `tuicr pr <branch>` | Review another local branch |
-| `tuicr pr --base <ref> [<branch>]` | Override the local pull request's base reference |
-| `:resolve` | Resolve the thread at the cursor |
-| `:unresolve` | Reopen the thread at the cursor |
 
 ### To GitLab
 

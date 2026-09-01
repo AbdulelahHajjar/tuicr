@@ -17,8 +17,8 @@ use crate::forge::submit::GhSide;
 use crate::forge::traits::{
     CreateReviewRequest, ForgeBackend, ForgeFileLinesRequest, ForgeRepository,
     GhCreateReviewResponse, PagedPullRequests, PullRequestCommit, PullRequestDetails,
-    PullRequestInfo, PullRequestListQuery, PullRequestReviewMetadata, PullRequestReviewRecord,
-    PullRequestReviewStatus, PullRequestSummary, PullRequestTarget,
+    PullRequestHeadStatus, PullRequestInfo, PullRequestListQuery, PullRequestReviewMetadata,
+    PullRequestReviewRecord, PullRequestReviewStatus, PullRequestSummary, PullRequestTarget,
 };
 use crate::model::{DiffLine, FilePatch};
 use crate::syntax::SyntaxHighlighter;
@@ -33,21 +33,55 @@ use self::target::{branch_tip, pull_is_closed, resolve_default_base, resolve_ref
 #[derive(Debug, Clone)]
 pub struct LocalForgeBackend {
     repository: ForgeRepository,
-    checkout: PathBuf,
-    store: LocalForgeStore,
-    author: String,
+    checkout: Option<PathBuf>,
+    store: Option<LocalForgeStore>,
+    author: Option<String>,
 }
 
 impl LocalForgeBackend {
     /// Create a local forge backed by `checkout` and tuicr's data directory.
-    pub fn new(repository: ForgeRepository, checkout: PathBuf) -> Result<Self> {
-        let checkout = Repository::discover(&checkout)?
-            .workdir()
-            .ok_or(TuicrError::NotARepository)?
-            .canonicalize()?;
-        let store = LocalForgeStore::new(&repository)?;
-        let git = Repository::open(&checkout)?;
-        let author = git
+    pub fn new(repository: ForgeRepository, checkout: Option<PathBuf>) -> Self {
+        Self {
+            repository,
+            checkout,
+            store: None,
+            author: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_store(repository: ForgeRepository, checkout: PathBuf, store: LocalForgeStore) -> Self {
+        Self {
+            repository,
+            checkout: Some(checkout),
+            store: Some(store),
+            author: Some("Test User".to_string()),
+        }
+    }
+
+    fn git(&self) -> Result<Repository> {
+        Ok(Repository::discover(self.checkout()?)?)
+    }
+
+    fn checkout(&self) -> Result<&Path> {
+        self.checkout.as_deref().ok_or_else(|| {
+            TuicrError::Forge("Local pull requests require a checkout path".to_string())
+        })
+    }
+
+    fn store(&self) -> Result<LocalForgeStore> {
+        self.store
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| LocalForgeStore::new(&self.repository))
+    }
+
+    fn author(&self) -> Result<String> {
+        if let Some(author) = &self.author {
+            return Ok(author.clone());
+        }
+        Ok(self
+            .git()?
             .config()?
             .get_string("user.name")
             .ok()
@@ -57,27 +91,7 @@ impl LocalForgeBackend {
                     .ok()
                     .filter(|name| !name.trim().is_empty())
             })
-            .unwrap_or_else(|| "you".to_string());
-        Ok(Self {
-            repository,
-            checkout,
-            store,
-            author,
-        })
-    }
-
-    #[cfg(test)]
-    fn with_store(repository: ForgeRepository, checkout: PathBuf, store: LocalForgeStore) -> Self {
-        Self {
-            repository,
-            checkout,
-            store,
-            author: "Test User".to_string(),
-        }
-    }
-
-    fn git(&self) -> Result<Repository> {
-        Ok(Repository::open(&self.checkout)?)
+            .unwrap_or_else(|| "you".to_string()))
     }
 
     fn pull_url(&self, number: u64) -> String {
@@ -89,15 +103,14 @@ impl LocalForgeBackend {
 
     fn details_for_number(&self, number: u64) -> Result<PullRequestDetails> {
         let git = self.git()?;
-        let mut pull = self.store.pull(number)?;
+        let store = self.store()?;
+        let mut pull = store.pull(number)?;
         let closed = pull_is_closed(&git, &pull);
         let head_oid = if closed {
             Oid::from_str(&pull.last_head_sha).map_err(TuicrError::Git)?
         } else {
             let oid = branch_tip(&git, &pull.head_ref)?;
-            pull = self
-                .store
-                .open_pull(&pull.head_ref, &pull.base_ref, &oid.to_string(), false)?;
+            pull = store.open_pull(&pull.head_ref, &pull.base_ref, &oid.to_string(), false)?;
             oid
         };
         let base_tip = resolve_ref_oid(&git, &pull.base_ref)?;
@@ -168,6 +181,7 @@ impl LocalForgeBackend {
 impl ForgeBackend for LocalForgeBackend {
     fn list_pull_requests(&self, query: PullRequestListQuery) -> Result<PagedPullRequests> {
         let git = self.git()?;
+        let store = self.store()?;
         let default_base = resolve_default_base(&git)?;
         let default_base_oid = resolve_ref_oid(&git, &default_base)?;
         let mut rows = Vec::new();
@@ -180,8 +194,7 @@ impl ForgeBackend for LocalForgeBackend {
                 continue;
             }
             let tip = branch.get().peel_to_commit()?;
-            let base_ref = self
-                .store
+            let base_ref = store
                 .find_pull_by_head(&name)?
                 .map(|pull| pull.base_ref)
                 .unwrap_or_else(|| default_base.clone());
@@ -189,9 +202,7 @@ impl ForgeBackend for LocalForgeBackend {
             if git.graph_ahead_behind(tip.id(), base_oid)?.0 == 0 {
                 continue;
             }
-            let pull = self
-                .store
-                .open_pull(&name, &base_ref, &tip.id().to_string(), false)?;
+            let pull = store.open_pull(&name, &base_ref, &tip.id().to_string(), false)?;
             rows.push((tip.time().seconds(), pull, tip));
         }
         rows.sort_by_key(|(seconds, _, _)| std::cmp::Reverse(*seconds));
@@ -227,7 +238,7 @@ impl ForgeBackend for LocalForgeBackend {
 
     fn get_pull_request_info(&self, target: PullRequestTarget) -> Result<PullRequestInfo> {
         let details = self.details_for_number(target.number)?;
-        let reviews = self.store.reviews(target.number)?;
+        let reviews = self.store()?.reviews(target.number)?;
         let non_pending = reviews
             .iter()
             .filter(|review| review.event != "PENDING")
@@ -255,7 +266,16 @@ impl ForgeBackend for LocalForgeBackend {
 
     fn get_pull_request_diff(&self, pr: &PullRequestDetails) -> Result<Vec<FilePatch>> {
         let range = format!("{}..{}", pr.base_sha, pr.head_sha);
-        run_git_diff(&self.checkout, &[&range])
+        run_git_diff(self.checkout()?, &[&range])
+    }
+
+    fn head_status(&self, pr: &PullRequestDetails) -> Result<Option<PullRequestHeadStatus>> {
+        let git = self.git()?;
+        let Ok(reference) = git.find_reference(&format!("refs/heads/{}", pr.head_ref_name)) else {
+            return Ok(Some(PullRequestHeadStatus::Closed));
+        };
+        let head = reference.peel_to_commit()?.id().to_string();
+        Ok(Some(PullRequestHeadStatus::Open(head)))
     }
 
     fn fetch_file_lines(&self, request: ForgeFileLinesRequest) -> Result<Vec<DiffLine>> {
@@ -278,7 +298,7 @@ impl ForgeBackend for LocalForgeBackend {
     }
 
     fn list_review_threads(&self, pr: &PullRequestDetails) -> Result<Vec<RemoteReviewThread>> {
-        let threads = self.store.threads(pr.number)?;
+        let threads = self.store()?.threads(pr.number)?;
         if threads.is_empty() {
             return Ok(Vec::new());
         }
@@ -316,7 +336,7 @@ impl ForgeBackend for LocalForgeBackend {
 
     fn list_review_summaries(&self, pr: &PullRequestDetails) -> Result<Vec<RemoteReviewSummary>> {
         Ok(self
-            .store
+            .store()?
             .reviews(pr.number)?
             .into_iter()
             .filter(|review| review.event != "PENDING" && !review.body.trim().is_empty())
@@ -343,10 +363,11 @@ impl ForgeBackend for LocalForgeBackend {
         &self,
         pr: &PullRequestDetails,
     ) -> Result<PullRequestReviewMetadata> {
+        let author = self.author()?;
         Ok(PullRequestReviewMetadata {
-            viewer_login: Some(self.author.clone()),
+            viewer_login: Some(author),
             reviews: self
-                .store
+                .store()?
                 .reviews(pr.number)?
                 .into_iter()
                 .filter(|review| review.event != "PENDING")
@@ -366,11 +387,11 @@ impl ForgeBackend for LocalForgeBackend {
         end_sha: &str,
     ) -> Result<Vec<FilePatch>> {
         let range = format!("{start_sha}..{end_sha}");
-        run_git_diff(&self.checkout, &[&range])
+        run_git_diff(self.checkout()?, &[&range])
     }
 
     fn local_checkout_path(&self) -> Option<PathBuf> {
-        Some(self.checkout.clone())
+        self.checkout.clone()
     }
 
     fn create_review(
@@ -388,7 +409,8 @@ impl ForgeBackend for LocalForgeBackend {
             request.diff_start_sha.unwrap_or(&pr.base_sha),
             request.commit_id
         );
-        let files = self.parsed_diff(run_git_diff(&self.checkout, &[&range])?)?;
+        let files = self.parsed_diff(run_git_diff(self.checkout()?, &[&range])?)?;
+        let author = self.author()?;
         let now = Utc::now();
         let threads = request
             .comments
@@ -414,7 +436,7 @@ impl ForgeBackend for LocalForgeBackend {
                     review_id: 0,
                     comments: vec![LocalThreadComment {
                         id: uuid::Uuid::new_v4().to_string(),
-                        author: self.author.clone(),
+                        author: author.clone(),
                         body: comment.body.clone(),
                         created_at: now,
                     }],
@@ -422,12 +444,12 @@ impl ForgeBackend for LocalForgeBackend {
             })
             .collect();
         let event = request.event.github_event().unwrap_or("PENDING");
-        let review = self.store.add_review(
+        let review = self.store()?.add_review(
             pr.number,
             event,
             request.body,
             request.commit_id,
-            &self.author,
+            &author,
             threads,
         )?;
         Ok(GhCreateReviewResponse {
@@ -443,7 +465,12 @@ impl ForgeBackend for LocalForgeBackend {
         thread_id: &str,
         resolved: bool,
     ) -> Result<()> {
-        self.store.resolve_thread(pr.number, thread_id, resolved)
+        if pr.is_read_only() {
+            return Err(TuicrError::Forge(
+                "Cannot update a closed local pull request".to_string(),
+            ));
+        }
+        self.store()?.resolve_thread(pr.number, thread_id, resolved)
     }
 }
 
@@ -945,6 +972,23 @@ mod tests {
         let threads = fixture.store.threads(fixture.pull_number).unwrap();
         assert_eq!(threads[0].line_text, "beta changed");
         assert_eq!(threads[0].base_commit, fixture.base.to_string());
+    }
+
+    #[test]
+    fn should_reject_resolving_thread_on_closed_pull_request() {
+        let fixture = Fixture::new();
+        let mut details = fixture.details();
+        details.closed = true;
+
+        let error = fixture
+            .backend
+            .resolve_thread(&details, "thread", true)
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Cannot update a closed local pull request"
+        );
     }
 
     #[test]

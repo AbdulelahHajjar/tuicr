@@ -366,7 +366,14 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
                 "  r         ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw("Toggle PRs requesting your review"),
+            Span::raw("Toggle forge PRs requesting your review"),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  l         ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Toggle Forge / Local pull requests"),
         ]),
         Line::from(vec![
             Span::styled(

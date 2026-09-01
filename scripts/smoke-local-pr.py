@@ -14,7 +14,8 @@ Scenario (mirrors docs/LOCAL_FORGE.md "Judged by"):
   4. amend the branch tip in another process   -> auto-follow reloads at the new head
   5. thread still listed (re-anchored)         -> `:resolve`
   6. `:comments unresolved` hides it, `:comments all` shows it
-  7. `tuicr review list --repo <repo>` lists the local PR session
+  7. plain `tuicr` -> Pull Requests tab -> `l` -> local branch row -> Enter opens local PR #1
+  8. `tuicr review list --repo <repo>` lists the local PR session
 Exit status 0 when every check passes; each failed check is printed.
 """
 import argparse
@@ -115,6 +116,7 @@ def main():
     options = parser.parse_args()
     if not options.tuicr:
         raise SystemExit("no tuicr binary found")
+    options.tuicr = os.path.abspath(options.tuicr)
 
     work = tempfile.mkdtemp(prefix="tuicr-smoke-")
     home = os.path.join(work, "home")
@@ -222,6 +224,25 @@ def main():
             bodies = [c["content"] for review in data["files"].values() for comments in review["line_comments"].values() for c in comments]
             carried = "second draft" in bodies
         check(carried, "relaunch at the new head carried the unsubmitted draft")
+        tui.keys(":q!\r", 1.0)
+        tui.stop()
+
+        print("== Pull Requests tab: l switches to local branches, Enter opens one")
+        tui = Tui(options.tuicr, repo, env, ["--no-update-check"])   # commit selector
+        tui.pump(4)
+        tui.keys("\t", 3.0)          # Pull Requests tab (forge source loads first and fails offline)
+        tui.keys("l", 3.0)            # local source
+        tab_text = screen_text(tui.output)
+        # ratatui redraws only changed cells, so look for the Local-only footer hint and the branch row
+        check("l forge" in tab_text and FEATURE in tab_text, "PR tab lists the local branch under the Local source")
+        tui.keys("\r", 2.0)          # open the highlighted local pull request (background fetch)
+        opened = False
+        for _ in range(20):
+            if "PR #1" in screen_text(tui.output):
+                opened = True
+                break
+            tui.pump(1.0)
+        check(opened, "opening the local row enters PR mode for local pull request #1")
         tui.keys(":q!\r", 1.0)
         tui.stop()
 

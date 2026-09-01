@@ -77,6 +77,8 @@ pub(crate) fn resolve_local_target(
 }
 
 pub(crate) fn local_repository(checkout: &Path) -> Result<ForgeRepository> {
+    let git = Repository::discover(checkout)?;
+    let checkout = git.workdir().ok_or(TuicrError::NotARepository)?;
     let (owner, name) = slug::resolve_owner_repo(checkout).map_err(|error| {
         TuicrError::Forge(format!("Could not identify local repository: {error}"))
     })?;
@@ -247,9 +249,8 @@ mod tests {
         let store = LocalForgeStore::new(&resolved.repository).unwrap();
         let backend = crate::forge::local::LocalForgeBackend::new(
             resolved.repository.clone(),
-            resolved.checkout.clone(),
-        )
-        .unwrap();
+            Some(resolved.checkout.clone()),
+        );
         let details = backend.get_pull_request(resolved.target.clone()).unwrap();
 
         assert_eq!(

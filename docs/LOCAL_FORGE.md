@@ -60,8 +60,8 @@ comments --session local:…` resolves them. Export headers print
 ## The store
 
 Location: `<tuicr data dir>/local-forge/<owner>__<name>/` — a sibling of the
-`reviews/` session store (same `ProjectDirs` lookup; any `/` inside `owner`
-is replaced by `-` in the directory name). Nothing is ever written inside a
+`reviews/` session store. Both fields are sanitized into one path component:
+`/`, `\`, `..`, and a leading `.` are replaced. Nothing is ever written inside a
 repository working tree or `.git`.
 
 ```
@@ -127,7 +127,8 @@ comment ids are UUID strings (`RemoteReviewThread.id` is an opaque string).
 ## `LocalForgeBackend` — `ForgeBackend` method by method
 
 `src/forge/local/{mod.rs, store.rs, target.rs, anchor.rs}`. The backend
-holds the repository identity, the checkout path and a store handle. All git
+holds the repository identity and an optional checkout path; checkout discovery,
+store lookup, and author lookup happen on first use. All git
 reads go through `git2` against the checkout (or the CLI adapter in
 `vcs/git/raw.rs`, which already produces `FilePatch` values) — never through
 a network. The checkout is the source of truth.
@@ -138,6 +139,7 @@ a network. The checkout is the source of truth.
 | `get_pull_request(target)` | Pull by `target.number`. `head_sha` = tip of `head_ref` (or `last_head_sha` when the branch is gone → closed), `base_sha` = `merge-base(base_ref, head_sha)`, `title` = tip subject, `body` = commit list: with one commit its body; with several, one `- <short sha> <subject>` line per commit oldest-first followed by each non-empty commit body indented. `author` = tip author, `updated_at` = tip time, `url` as above, `diff_start_sha: None`. |
 | `get_pull_request_info(target)` | `from_details` plus: `review_decision` = state of the newest non-pending review (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`), `None` when there is none; `latest_reviews` = newest non-pending review per author; `mergeable`/`merge_state`/`checks`/`requested_reviewers`/`issue_comments` empty. |
 | `get_pull_request_diff(pr)` | Cumulative `FilePatch`es for `base_sha..head_sha`. |
+| `head_status(pr)` | `Open(head_sha)` while `refs/heads/<head>` exists, otherwise `Closed`. Other backends use the trait default `Ok(None)`. |
 | `get_pull_request_commit_range_diff(pr, start, end)` | `FilePatch`es for `start..end`. |
 | `list_pull_request_commits(pr)` | Commits `base_sha..head_sha`, oldest first: `oid`, 7-char `short_oid`, `summary` = subject, `author` = author name, `timestamp`. |
 | `list_pull_request_review_metadata(pr)` | `viewer_login` = Author; one record per non-pending review: `(author, submitted_at, Some(commit_id))`. |
@@ -145,7 +147,7 @@ a network. The checkout is the source of truth.
 | `list_review_threads(pr)` | Every thread in `threads.json`, re-anchored against the current `base_sha..head_sha` diff (see *Anchoring*). Comments map to `RemoteReviewComment` (`in_reply_to` = root comment id for every comment after the first). Pending-review threads are included (the author sees their own pending comments, as on GitHub). |
 | `fetch_file_lines(request)` / `file_line_count` | Read the blob at `request.sha()` for `request.path` from the checkout. |
 | `local_checkout_path()` | `Some(checkout)`. |
-| `create_review(pr, request)` | Allocate a review id; store the review (`Draft` → `PENDING`, others → their GitHub event name; `commit_id = request.commit_id`; `body`). For each `InlineComment`, create one thread anchored at `(path, line, side)` with `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` = content of that diff line (looked up in the `start..end` patch the comment was mapped against; empty string when it cannot be found), one root comment (`body`, Author, `review_id`). A non-`Draft` event with a `PENDING` review of the Author outstanding **submits that pending review in place** (GitHub's "submit pending review"): its event becomes the new event, its body the request body when non-empty, its `submitted_at` now, and the new threads attach to it; the response carries *its* id. Only when no pending review exists is a new review allocated. The range the inline comments were mapped against arrives as `CreateReviewRequest::diff_start_sha` (the parent SHA the displayed diff starts at, `None` for the full pull request); `line_text` is looked up in the `<that start>..<request.commit_id>` patch. Return `GhCreateReviewResponse { id, html_url, state }` where `state` is `PENDING`/`COMMENTED`/`APPROVED`/`CHANGES_REQUESTED`. |
+| `create_review(pr, request)` | Allocate a review id; store the review (`Draft` → `PENDING`, others → their GitHub event name; `commit_id = request.commit_id`; `body`). For each `InlineComment`, create one thread anchored at `(path, line, side)` with `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` = content of that diff line (looked up in the `start..end` patch the comment was mapped against; empty string when it cannot be found), one root comment (`body`, Author, `review_id`). Any event reuses the Author's outstanding `PENDING` review: another Draft updates its non-empty body and attaches new threads; a non-Draft submits that same review in place. Only when no pending review exists is a new review allocated. The range the inline comments were mapped against arrives as `CreateReviewRequest::diff_start_sha` (the parent SHA the displayed diff starts at, `None` for the full pull request); `line_text` is looked up in the `<that start>..<request.commit_id>` patch. Return `GhCreateReviewResponse { id, html_url, state }` where `state` is `PENDING`/`COMMENTED`/`APPROVED`/`CHANGES_REQUESTED`. |
 | `resolve_thread(pr, thread_id, resolved)` — **new trait method** | Set `is_resolved`/`resolved_at` on the thread and persist. Default implementation on the trait: `Err(TuicrError::UnsupportedOperation("Resolving review threads is not supported on <Forge>"))`; no other backend implements it in this version. |
 
 ### Anchoring (outdated detection)
@@ -179,6 +181,10 @@ carries the invocation as `pr: Option<PrInvocation { target: Option<String>, bas
 (replacing `pr_target: Option<String>`), so "`tuicr pr` with no target" is
 distinguishable from "no `pr` subcommand".
 
+The `mr` command remains forge-only with a required target and no `--base`
+option. `tuicr mr 125` and `tuicr tui mr 125` keep their existing routing,
+while a missing target or `--base` is rejected by clap.
+
 Target resolution in `App::new_from_pr_target…`:
 
 1. No target → the checkout's current branch. Detached HEAD, or HEAD on the
@@ -193,17 +199,26 @@ Target resolution in `App::new_from_pr_target…`:
 The Local repository identity, the store and the pull number are resolved in
 `forge/local/target.rs`; the result is a `PullRequestTarget::with_repository(local_repo, number, original)`
 fed to the unchanged `open_pull_request` flow. `create_forge_backend` gains
-a `Local` arm that requires the checkout path (the `local_checkout` argument;
+a `Local` arm. Construction is infallible; a missing checkout is reported by
+the first backend method that needs it (the `local_checkout` argument;
 threads/reload/submit spawns obtain it from `backend.local_checkout_path()`
 exactly as they do for GitHub). Opening a local pull request does not call
 `resolve_canonical_repository` or any `gh` command.
 
+The target selector's Pull Requests tab has Forge and Local sources. `l`
+switches sources and reloads page one; the Local source lists branches ahead
+of the base through `LocalForgeBackend::list_pull_requests`, supports the same
+paging and open flow, and is the default when no forge remote is detected.
+The `r` review-requested filter applies only to the Forge source.
+
 ## Auto-follow
 
-A local pull request follows its head branch: on the diff-watch tick, when the
-diff source is a `PullRequest` whose repository kind is `Local`, compare the
-current tip of `head_ref` in the checkout with `current_pr_head`; if it moved
-and no PR reload is in flight, call `spawn_pr_reload()`. Everything after
+A backend opts into pull-request following through `head_status`. Local returns
+`Open(head_sha)` or `Closed`; the default `Ok(None)` disables following. When an
+open head moves, or a previously open head closes, the tick calls
+`spawn_pr_reload()`. It defers while the input mode is not `Normal`, or while a
+submit, range reload, or PR reload is in flight, and never follows a PR that is
+already closed. Everything after
 that is the existing reload path (`finish_pr_reload` → head changed →
 `opened_pr_with_new_head_session` → "Reloaded PR at new head"). `:e` keeps
 working as well, and a fresh launch carries state from the previous head.
@@ -242,9 +257,9 @@ status bar shows "Thread resolved" / "Thread reopened". An
 `README.md` (a "Local pull requests" section under forge review; commands
 table), `docs/KEYBINDINGS.md` (`:resolve`, `:unresolve`), `docs/CONFIG.md`
 (`local_pr_follow_interval_ms`), `AGENTS.md` (module tree, key types, forge
-invariants — including that `Local` never shells out and that thread
+invariants — including that `Local` never calls a forge CLI or the network and that thread
 resolution exists only for `Local`), `src/ui/help_popup.rs`,
-`src/ui/status_bar.rs` (PR-mode hint), and this file.
+and this file.
 
 ## Verification contract
 

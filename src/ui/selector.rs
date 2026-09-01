@@ -94,8 +94,13 @@ fn render_top_bar(frame: &mut Frame, app: &App, area: Rect) {
         },
     ));
     spans.push(Span::styled(" ".to_string(), strip_style));
+    let pull_requests_label = if pr_active {
+        format!(" {} Pull Requests ", app.pr_tab.source().label())
+    } else {
+        format!(" {TAB_PULL_REQUESTS} ")
+    };
     spans.push(Span::styled(
-        format!(" {TAB_PULL_REQUESTS} "),
+        pull_requests_label,
         if pr_active {
             active_chip
         } else {
@@ -546,11 +551,20 @@ fn render_target_selector_footer(frame: &mut Frame, app: &App, area: Rect) {
                     .to_string()
             }
             TargetTab::PullRequests => {
-                let scope_hint = match app.pr_tab.scope() {
-                    PullRequestListScope::Open => "r requested",
-                    PullRequestListScope::ReviewRequested => "r all PRs",
+                let source_hint = match app.pr_tab.source() {
+                    crate::forge::selector::PullRequestSource::Forge => "l local",
+                    crate::forge::selector::PullRequestSource::Local => "l forge",
                 };
-                format!("   j/k navigate · ↵ open · {scope_hint} · / filter · esc back")
+                let scope_hint = match app.pr_tab.source() {
+                    crate::forge::selector::PullRequestSource::Forge => match app.pr_tab.scope() {
+                        PullRequestListScope::Open => " · r requested",
+                        PullRequestListScope::ReviewRequested => " · r all PRs",
+                    },
+                    crate::forge::selector::PullRequestSource::Local => "",
+                };
+                format!(
+                    "   j/k navigate · ↵ open · {source_hint}{scope_hint} · / filter · esc back"
+                )
             }
             TargetTab::Sessions => "   j/k navigate · ↵ resume · esc back".to_string(),
         }

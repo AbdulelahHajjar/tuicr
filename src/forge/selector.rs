@@ -10,6 +10,36 @@ use crate::forge::traits::{ForgeRepository, PullRequestListScope, PullRequestSum
 
 pub const PR_PAGE_SIZE: usize = 30;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestSource {
+    Forge,
+    Local,
+}
+
+impl PullRequestSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Forge => "Forge",
+            Self::Local => "Local",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PullRequestSources {
+    forge: Option<ForgeRepository>,
+    local: Option<ForgeRepository>,
+}
+
+impl PullRequestSources {
+    fn repository(&self, source: PullRequestSource) -> Option<&ForgeRepository> {
+        match source {
+            PullRequestSource::Forge => self.forge.as_ref(),
+            PullRequestSource::Local => self.local.as_ref(),
+        }
+    }
+}
+
 /// High level state for the Pull Requests tab.
 ///
 /// The tab is `Disabled` when the current repo has no GitHub remote. It is
@@ -24,14 +54,20 @@ pub enum PullRequestsTab {
     },
     Idle {
         repository: ForgeRepository,
+        sources: PullRequestSources,
+        source: PullRequestSource,
         scope: PullRequestListScope,
     },
     Loading {
         repository: ForgeRepository,
+        sources: PullRequestSources,
+        source: PullRequestSource,
         scope: PullRequestListScope,
     },
     Loaded {
         repository: ForgeRepository,
+        sources: PullRequestSources,
+        source: PullRequestSource,
         rows: Vec<PullRequestSummary>,
         has_more: bool,
         loading_more: bool,
@@ -42,6 +78,8 @@ pub enum PullRequestsTab {
     },
     Error {
         repository: Option<ForgeRepository>,
+        sources: PullRequestSources,
+        source: PullRequestSource,
         scope: PullRequestListScope,
         message: String,
     },
@@ -60,6 +98,7 @@ pub struct PrTabView<'a> {
     pub has_load_more: bool,
     pub filter: &'a str,
     pub scope: PullRequestListScope,
+    pub source: PullRequestSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,9 +118,21 @@ pub struct PrRow<'a> {
 
 impl PullRequestsTab {
     pub fn new(repository: Option<ForgeRepository>) -> Self {
-        match repository {
-            Some(repo) => PullRequestsTab::Idle {
-                repository: repo,
+        Self::new_with_local(repository, None)
+    }
+
+    pub fn new_with_local(forge: Option<ForgeRepository>, local: Option<ForgeRepository>) -> Self {
+        let sources = PullRequestSources { forge, local };
+        let source = if sources.forge.is_some() {
+            PullRequestSource::Forge
+        } else {
+            PullRequestSource::Local
+        };
+        match sources.repository(source).cloned() {
+            Some(repository) => PullRequestsTab::Idle {
+                repository,
+                sources,
+                source,
                 scope: PullRequestListScope::Open,
             },
             None => PullRequestsTab::Disabled {
@@ -113,6 +164,16 @@ impl PullRequestsTab {
         }
     }
 
+    pub fn source(&self) -> PullRequestSource {
+        match self {
+            PullRequestsTab::Idle { source, .. }
+            | PullRequestsTab::Loading { source, .. }
+            | PullRequestsTab::Loaded { source, .. }
+            | PullRequestsTab::Error { source, .. } => *source,
+            PullRequestsTab::Disabled { .. } => PullRequestSource::Forge,
+        }
+    }
+
     /// True when the tab is currently waiting on a network call.
     pub fn is_loading(&self) -> bool {
         matches!(self, PullRequestsTab::Loading { .. })
@@ -133,11 +194,21 @@ impl PullRequestsTab {
 
     /// Begin the initial fetch. Only meaningful from `Idle`.
     pub fn start_initial_load(&mut self) -> Option<(ForgeRepository, PullRequestListScope)> {
-        if let PullRequestsTab::Idle { repository, scope } = self {
+        if let PullRequestsTab::Idle {
+            repository,
+            sources,
+            source,
+            scope,
+        } = self
+        {
             let repo = repository.clone();
+            let sources = sources.clone();
+            let source = *source;
             let scope = *scope;
             *self = PullRequestsTab::Loading {
                 repository: repo.clone(),
+                sources,
+                source,
                 scope,
             };
             Some((repo, scope))
@@ -170,13 +241,55 @@ impl PullRequestsTab {
     pub fn toggle_scope_and_start_reload(
         &mut self,
     ) -> Option<(ForgeRepository, PullRequestListScope)> {
+        if self.source() != PullRequestSource::Forge {
+            return None;
+        }
         let repository = self.repository()?.clone();
+        let (sources, source) = self.sources()?;
         let next_scope = self.scope().toggled();
         *self = PullRequestsTab::Loading {
             repository: repository.clone(),
+            sources,
+            source,
             scope: next_scope,
         };
         Some((repository, next_scope))
+    }
+
+    pub fn toggle_source_and_start_reload(
+        &mut self,
+    ) -> Option<(ForgeRepository, PullRequestListScope)> {
+        let (sources, source) = self.sources()?;
+        let next = match source {
+            PullRequestSource::Forge => PullRequestSource::Local,
+            PullRequestSource::Local => PullRequestSource::Forge,
+        };
+        let repository = sources.repository(next)?.clone();
+        *self = PullRequestsTab::Loading {
+            repository: repository.clone(),
+            sources,
+            source: next,
+            scope: PullRequestListScope::Open,
+        };
+        Some((repository, PullRequestListScope::Open))
+    }
+
+    fn sources(&self) -> Option<(PullRequestSources, PullRequestSource)> {
+        match self {
+            PullRequestsTab::Idle {
+                sources, source, ..
+            }
+            | PullRequestsTab::Loading {
+                sources, source, ..
+            }
+            | PullRequestsTab::Loaded {
+                sources, source, ..
+            }
+            | PullRequestsTab::Error {
+                sources, source, ..
+            } => Some((sources.clone(), *source)),
+            PullRequestsTab::Disabled { .. } => None,
+        }
     }
 
     /// Promote the in-flight `Loading` tab to a (possibly different)
@@ -185,23 +298,38 @@ impl PullRequestsTab {
     /// background thread resolved a fork's parent. No-op when not in
     /// `Loading` or when the canonical matches the existing repository.
     pub fn apply_canonical(&mut self, canonical: ForgeRepository) {
-        if let PullRequestsTab::Loading { repository, .. } = self
+        if let PullRequestsTab::Loading {
+            repository,
+            sources,
+            source,
+            ..
+        } = self
             && *repository != canonical
         {
             *repository = canonical;
+            if *source == PullRequestSource::Forge {
+                sources.forge = Some(repository.clone());
+            }
         }
     }
 
     /// Apply the result of the initial load.
     pub fn apply_initial_load(&mut self, result: Result<(Vec<PullRequestSummary>, bool), String>) {
-        let (repository, scope) = match self {
-            PullRequestsTab::Loading { repository, scope } => (repository.clone(), *scope),
+        let (repository, sources, source, scope) = match self {
+            PullRequestsTab::Loading {
+                repository,
+                sources,
+                source,
+                scope,
+            } => (repository.clone(), sources.clone(), *source, *scope),
             _ => return,
         };
         match result {
             Ok((rows, has_more)) => {
                 *self = PullRequestsTab::Loaded {
                     repository,
+                    sources,
+                    source,
                     rows,
                     has_more,
                     loading_more: false,
@@ -214,6 +342,8 @@ impl PullRequestsTab {
             Err(message) => {
                 *self = PullRequestsTab::Error {
                     repository: Some(repository),
+                    sources,
+                    source,
                     scope,
                     message,
                 };
@@ -225,6 +355,8 @@ impl PullRequestsTab {
     pub fn apply_load_more(&mut self, result: Result<(Vec<PullRequestSummary>, bool), String>) {
         if let PullRequestsTab::Loaded {
             repository,
+            sources,
+            source,
             rows,
             has_more,
             loading_more,
@@ -243,9 +375,13 @@ impl PullRequestsTab {
                     // surface the message and clear the busy flag so the user
                     // can try again.
                     let repository = Some(repository.clone());
+                    let sources = sources.clone();
+                    let source = *source;
                     let scope = *scope;
                     *self = PullRequestsTab::Error {
                         repository,
+                        sources,
+                        source,
                         scope,
                         message,
                     };
@@ -392,8 +528,9 @@ impl PullRequestsTab {
                 has_load_more: false,
                 filter: "",
                 scope: PullRequestListScope::Open,
+                source: PullRequestSource::Forge,
             },
-            PullRequestsTab::Idle { scope, .. } => PrTabView {
+            PullRequestsTab::Idle { scope, source, .. } => PrTabView {
                 status: PrTabStatus::Idle,
                 rows: Vec::new(),
                 cursor: 0,
@@ -401,8 +538,9 @@ impl PullRequestsTab {
                 has_load_more: false,
                 filter: "",
                 scope: *scope,
+                source: *source,
             },
-            PullRequestsTab::Loading { scope, .. } => PrTabView {
+            PullRequestsTab::Loading { scope, source, .. } => PrTabView {
                 status: PrTabStatus::Loading,
                 rows: Vec::new(),
                 cursor: 0,
@@ -410,6 +548,7 @@ impl PullRequestsTab {
                 has_load_more: false,
                 filter: "",
                 scope: *scope,
+                source: *source,
             },
             PullRequestsTab::Loaded {
                 rows,
@@ -417,6 +556,7 @@ impl PullRequestsTab {
                 loading_more,
                 filter,
                 scope,
+                source,
                 cursor,
                 scroll_offset,
                 ..
@@ -439,9 +579,15 @@ impl PullRequestsTab {
                     has_load_more: *has_more && filter.is_empty(),
                     filter: filter.as_str(),
                     scope: *scope,
+                    source: *source,
                 }
             }
-            PullRequestsTab::Error { message, scope, .. } => PrTabView {
+            PullRequestsTab::Error {
+                message,
+                scope,
+                source,
+                ..
+            } => PrTabView {
                 status: PrTabStatus::Error(message.as_str()),
                 rows: Vec::new(),
                 cursor: 0,
@@ -449,6 +595,7 @@ impl PullRequestsTab {
                 has_load_more: false,
                 filter: "",
                 scope: *scope,
+                source: *source,
             },
         }
     }
@@ -502,6 +649,10 @@ mod tests {
         ForgeRepository::github("github.com", "agavra", "tuicr")
     }
 
+    fn local_repo() -> ForgeRepository {
+        ForgeRepository::local("agavra", "tuicr")
+    }
+
     fn pr(number: u64, title: &str, author: &str, head: &str, base: &str) -> PullRequestSummary {
         PullRequestSummary {
             repository: repo(),
@@ -532,6 +683,31 @@ mod tests {
         let tab = PullRequestsTab::new(Some(repo()));
         // then
         assert!(matches!(tab, PullRequestsTab::Idle { .. }));
+    }
+
+    #[test]
+    fn should_toggle_between_forge_and_local_sources() {
+        let mut tab = PullRequestsTab::new_with_local(Some(repo()), Some(local_repo()));
+
+        assert_eq!(tab.source(), PullRequestSource::Forge);
+        assert_eq!(
+            tab.toggle_source_and_start_reload(),
+            Some((local_repo(), PullRequestListScope::Open))
+        );
+        assert_eq!(tab.source(), PullRequestSource::Local);
+        assert!(tab.toggle_scope_and_start_reload().is_none());
+        assert_eq!(
+            tab.toggle_source_and_start_reload(),
+            Some((repo(), PullRequestListScope::Open))
+        );
+    }
+
+    #[test]
+    fn should_default_to_local_source_without_forge_repository() {
+        let tab = PullRequestsTab::new_with_local(None, Some(local_repo()));
+
+        assert_eq!(tab.source(), PullRequestSource::Local);
+        assert_eq!(tab.repository(), Some(&local_repo()));
     }
 
     #[test]

@@ -357,17 +357,6 @@ pub fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 InputMode::Normal if app.focused_panel == FocusedPanel::FileList => Cow::Borrowed(
                     "   j/k move \u{00b7} \u{21b5} open \u{00b7} i/e filter \u{00b7} I/E clear \u{00b7} / search \u{00b7} r reviewed",
                 ),
-                InputMode::Normal
-                    if matches!(
-                        &app.diff_source,
-                        crate::app::DiffSource::PullRequest(pr)
-                            if pr.key.repository.kind == crate::forge::traits::ForgeKind::Local
-                    ) =>
-                {
-                    Cow::Borrowed(
-                        "   j/k scroll · c comment · :comments filter · :resolve thread · ? help",
-                    )
-                }
                 InputMode::Normal => Cow::Borrowed(
                     "   j/k scroll \u{00b7} {/} file \u{00b7} m/M comment \u{00b7} r file \u{00b7} R hunk \u{00b7} c comment \u{00b7} ? help",
                 ),

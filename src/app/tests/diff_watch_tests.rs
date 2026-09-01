@@ -3,7 +3,7 @@ use crate::app::diff_load::{
     normalize_diff_watch_result,
 };
 use crate::app::*;
-use crate::forge::traits::{ForgeRepository, PrSessionKey};
+use crate::forge::traits::{ForgeRepository, PrSessionKey, PullRequestHeadStatus};
 use std::sync::mpsc;
 
 /// Minimal `VcsBackend` used only to satisfy `App::build`'s requirement for
@@ -116,9 +116,9 @@ fn local_pull_request_source(head: &str) -> DiffSource {
     }))
 }
 
-struct CheckoutPathBackend(PathBuf);
+struct HeadStatusBackend(PullRequestHeadStatus);
 
-impl crate::forge::traits::ForgeBackend for CheckoutPathBackend {
+impl crate::forge::traits::ForgeBackend for HeadStatusBackend {
     fn list_pull_requests(
         &self,
         _query: crate::forge::traits::PullRequestListQuery,
@@ -163,8 +163,11 @@ impl crate::forge::traits::ForgeBackend for CheckoutPathBackend {
     ) -> Result<Vec<crate::model::FilePatch>> {
         unreachable!()
     }
-    fn local_checkout_path(&self) -> Option<PathBuf> {
-        Some(self.0.clone())
+    fn head_status(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+    ) -> Result<Option<PullRequestHeadStatus>> {
+        Ok(Some(self.0.clone()))
     }
     fn create_review(
         &self,
@@ -175,32 +178,16 @@ impl crate::forge::traits::ForgeBackend for CheckoutPathBackend {
     }
 }
 
-fn local_follow_app() -> (App, tempfile::TempDir, String) {
-    let temp = tempfile::tempdir().unwrap();
-    let git = git2::Repository::init(temp.path()).unwrap();
-    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
-    let tree_id = {
-        let mut index = git.index().unwrap();
-        index.write_tree().unwrap()
-    };
-    let tree = git.find_tree(tree_id).unwrap();
-    let head = git
-        .commit(
-            Some("refs/heads/feature"),
-            &signature,
-            &signature,
-            "head",
-            &tree,
-            &[],
-        )
-        .unwrap()
-        .to_string();
+fn local_follow_app() -> (App, String) {
+    let head = "new".to_string();
     let mut app = build_app(Vec::new(), local_pull_request_source("old"));
-    app.forge_backend = Some(Box::new(CheckoutPathBackend(temp.path().to_path_buf())));
+    app.forge_backend = Some(Box::new(HeadStatusBackend(PullRequestHeadStatus::Open(
+        head.clone(),
+    ))));
     app.current_pr_head = Some("old".to_string());
     app.local_pr_follow_interval = Some(Duration::from_millis(500));
     app.next_local_pr_follow_at = Instant::now() - Duration::from_millis(1);
-    (app, temp, head)
+    (app, head)
 }
 
 /// Hunks are left empty: most of these tests never render content.
@@ -349,7 +336,7 @@ fn should_not_spawn_for_pull_request_source() {
 
 #[test]
 fn should_follow_local_pr_when_head_moves() {
-    let (app, _temp, _head) = local_follow_app();
+    let (app, _head) = local_follow_app();
 
     assert_eq!(
         app.diff_watch_tick(Instant::now()),
@@ -359,7 +346,7 @@ fn should_follow_local_pr_when_head_moves() {
 
 #[test]
 fn should_spawn_exactly_one_local_pr_reload_when_head_moves() {
-    let (mut app, _temp, _head) = local_follow_app();
+    let (mut app, _head) = local_follow_app();
 
     app.poll_diff_watch_changes();
     let first = app.pr_reload_state.clone().expect("reload spawned");
@@ -373,7 +360,7 @@ fn should_spawn_exactly_one_local_pr_reload_when_head_moves() {
 
 #[test]
 fn should_not_follow_local_pr_while_reload_is_in_flight() {
-    let (mut app, _temp, _head) = local_follow_app();
+    let (mut app, _head) = local_follow_app();
     app.pr_reload_state = Some(PrReloadRequest {
         repository: ForgeRepository::local("owner", "repo"),
         pr_number: 1,
@@ -385,13 +372,52 @@ fn should_not_follow_local_pr_while_reload_is_in_flight() {
 
     assert_eq!(
         app.diff_watch_tick(Instant::now()),
-        DiffWatchTick::LocalPrUnchanged(Duration::from_millis(500))
+        DiffWatchTick::Defer(Duration::from_millis(500))
     );
 }
 
 #[test]
+fn should_defer_local_pr_follow_while_editing_comment() {
+    let (mut app, _head) = local_follow_app();
+    app.input_mode = InputMode::Comment;
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::Defer(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn should_defer_local_pr_follow_during_submit_confirmation() {
+    let (mut app, _head) = local_follow_app();
+    app.input_mode = InputMode::SubmitConfirm;
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::Defer(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn should_follow_deleted_local_branch_once() {
+    let (mut app, _head) = local_follow_app();
+    app.forge_backend = Some(Box::new(HeadStatusBackend(PullRequestHeadStatus::Closed)));
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::FollowLocalPr(Duration::from_millis(500))
+    );
+
+    let DiffSource::PullRequest(pr) = &mut app.diff_source else {
+        unreachable!();
+    };
+    pr.closed = true;
+    assert_eq!(app.diff_watch_tick(Instant::now()), DiffWatchTick::Idle);
+}
+
+#[test]
 fn should_disable_local_pr_follow_at_zero() {
-    let (mut app, _temp, _head) = local_follow_app();
+    let (mut app, _head) = local_follow_app();
     app.set_local_pr_follow_interval_ms(0);
 
     assert_eq!(app.diff_watch_tick(Instant::now()), DiffWatchTick::Idle);

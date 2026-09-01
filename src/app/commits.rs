@@ -1,6 +1,26 @@
 use super::*;
 
 impl App {
+    pub(in crate::app) fn local_pull_request_repository(&self) -> Option<ForgeRepository> {
+        self.local_repo_root
+            .as_deref()
+            .and_then(|root| crate::forge::local::target::local_repository(root).ok())
+    }
+
+    pub fn toggle_pr_source(&mut self) {
+        let Some((repo, scope)) = self.pr_tab.toggle_source_and_start_reload() else {
+            return;
+        };
+        self.pr_filter_draft = None;
+        let forge_source = self.pr_tab.source() == crate::forge::selector::PullRequestSource::Forge;
+        let override_repo = forge_source
+            .then(|| self.repo_url_override.clone())
+            .flatten();
+        let skip_resolution = !forge_source || self.canonical_resolved;
+        self.spawn_pr_initial_load(repo, override_repo, skip_resolution, scope);
+        self.set_message(format!("PR source: {}", self.pr_tab.source().label()));
+    }
+
     /// The commit-selection range a fresh multi-commit review opens with,
     /// honoring the `initial_commit_selection` config. `review_commits` is stored
     /// newest-first, so the oldest commit is the last index — that stays true
@@ -207,7 +227,10 @@ impl App {
 
         // Reset the PR tab to Idle each time the selector is opened so the
         // fetch happens lazily on first visit.
-        self.pr_tab = PullRequestsTab::new(self.forge_repository.clone());
+        self.pr_tab = PullRequestsTab::new_with_local(
+            self.forge_repository.clone(),
+            self.local_pull_request_repository(),
+        );
         self.pr_filter_draft = None;
         self.pr_load_rx = None;
 
@@ -308,8 +331,12 @@ impl App {
     /// Triggers the first network call lazily.
     fn on_target_tab_entered(&mut self) {
         if let Some((repo, scope)) = self.pr_tab.start_initial_load() {
-            let override_repo = self.repo_url_override.clone();
-            let skip_resolution = self.canonical_resolved;
+            let forge_source =
+                self.pr_tab.source() == crate::forge::selector::PullRequestSource::Forge;
+            let override_repo = forge_source
+                .then(|| self.repo_url_override.clone())
+                .flatten();
+            let skip_resolution = !forge_source || self.canonical_resolved;
             self.spawn_pr_initial_load(repo, override_repo, skip_resolution, scope);
         }
     }

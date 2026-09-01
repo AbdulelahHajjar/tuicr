@@ -506,6 +506,81 @@ fn should_keep_pr_tab_disabled_when_no_forge_remote() {
 }
 
 #[test]
+fn should_list_and_open_local_pull_request_without_forge_remote() {
+    let _reviews = TestReviewsDir::new();
+    let temp = tempfile::tempdir().unwrap();
+    let checkout = temp.path().join("repo");
+    std::fs::create_dir_all(&checkout).unwrap();
+    let git = git2::Repository::init(&checkout).unwrap();
+    let base = commit_to_branch(&git, "main", "base\n", "base", &[]);
+    commit_to_branch(&git, "feature", "feature\n", "feature", &[base]);
+    git.set_head("refs/heads/feature").unwrap();
+    git.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let mut app = build_app_rooted(checkout, Vec::new(), None);
+
+    assert_eq!(
+        app.pr_tab.source(),
+        crate::forge::selector::PullRequestSource::Local
+    );
+    app.cycle_target_tab(true);
+    for _ in 0..100 {
+        app.poll_pr_load_events();
+        if app.pr_tab.is_loaded() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(app.pr_tab.is_loaded());
+    assert_eq!(app.pr_tab.view().rows.len(), 1);
+    assert_eq!(app.pr_tab.view().rows[0].summary.head_ref_name, "feature");
+
+    assert!(app.pr_tab_select());
+    for _ in 0..100 {
+        app.poll_pr_open_events();
+        if app.pr_open_state.is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let DiffSource::PullRequest(pr) = &app.diff_source else {
+        panic!("expected local pull request mode");
+    };
+    assert_eq!(
+        pr.key.repository.kind,
+        crate::forge::traits::ForgeKind::Local
+    );
+    assert!(app.session_slug().unwrap().starts_with("local:"));
+}
+
+fn commit_to_branch(
+    git: &git2::Repository,
+    branch: &str,
+    content: &str,
+    message: &str,
+    parents: &[git2::Oid],
+) -> git2::Oid {
+    std::fs::write(git.workdir().unwrap().join("file.txt"), content).unwrap();
+    let mut index = git.index().unwrap();
+    index.add_path(Path::new("file.txt")).unwrap();
+    let tree = git.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+    let parents = parents
+        .iter()
+        .map(|oid| git.find_commit(*oid).unwrap())
+        .collect::<Vec<_>>();
+    git.commit(
+        Some(&format!("refs/heads/{branch}")),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents.iter().collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+#[test]
 fn should_set_filter_after_typing_and_committing() {
     // given
     let mut app = build_app();
@@ -2900,6 +2975,7 @@ fn should_resolve_thread_selected_in_comment_navigator() {
     assert_eq!(&*calls.borrow(), &[("T".to_string(), true)]);
     assert!(app.forge_review_threads[0].is_resolved);
     assert!(app.build_comment_navigator_items().is_empty());
+    assert_eq!(app.focused_panel, FocusedPanel::Diff);
 }
 
 #[test]

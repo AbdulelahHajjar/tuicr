@@ -180,6 +180,9 @@ pub fn resolve_remote_repository(vcs: &dyn VcsBackend, name: &str) -> Result<For
 /// `root`'s local checkout, but only when one of its remotes — not
 /// necessarily `origin` — matches `target_repo`.
 pub fn local_checkout_for_repo(root: &Path, target_repo: &ForgeRepository) -> Option<PathBuf> {
+    if target_repo.kind == traits::ForgeKind::Local {
+        return Some(root.to_path_buf());
+    }
     remote_urls(root)
         .iter()
         .any(|url| parse_any_remote_url(url).as_ref() == Some(target_repo))

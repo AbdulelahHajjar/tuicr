@@ -376,23 +376,20 @@ impl App {
                 pr_number,
                 pr_number.to_string(),
             );
-            let result = match backend {
-                Ok(backend) => match backend.get_pull_request(target) {
-                    Ok(details) => backend
-                        .create_review(
-                            &details,
-                            CreateReviewRequest {
-                                event,
-                                commit_id: &commit_id,
-                                diff_start_sha: diff_start_sha.as_deref(),
-                                body: &body,
-                                comments: &mappable,
-                            },
-                        )
-                        .map_err(|e| e.to_string()),
-                    Err(e) => Err(e.to_string()),
-                },
-                Err(error) => Err(error.to_string()),
+            let result = match backend.get_pull_request(target) {
+                Ok(details) => backend
+                    .create_review(
+                        &details,
+                        CreateReviewRequest {
+                            event,
+                            commit_id: &commit_id,
+                            diff_start_sha: diff_start_sha.as_deref(),
+                            body: &body,
+                            comments: &mappable,
+                        },
+                    )
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
             };
             let _ = tx.send(PrSubmitEvent::Done {
                 repository,

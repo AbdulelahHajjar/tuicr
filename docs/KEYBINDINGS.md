@@ -276,7 +276,8 @@ Thread resolution is available only for Local pull requests.
 | `Space` | Toggle local commit selection |
 | `Enter` | Confirm local commit range, open PR, load more PRs, or resume a saved review |
 | `/` | Filter currently loaded PR rows locally |
-| `r` | In Pull Requests tab, toggle all open PRs / PRs requesting your review |
+| `r` | In the Forge source of the Pull Requests tab, toggle all open PRs / PRs requesting your review |
+| `l` | In Pull Requests tab, toggle Forge / Local pull requests |
 | `Esc` | Return to the diff |
 | `:q` | Quit |
 

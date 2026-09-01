@@ -1,94 +1,6 @@
 use super::*;
 
 impl App {
-    pub fn resolve_review_thread_at_cursor(&mut self, resolved: bool) -> Result<()> {
-        let DiffSource::PullRequest(pr) = &self.diff_source else {
-            return Err(TuicrError::UnsupportedOperation(
-                "Not in PR mode".to_string(),
-            ));
-        };
-        let thread_idx = if self.focused_panel == FocusedPanel::Comments {
-            self.build_comment_navigator_items()
-                .get(self.comment_navigator_state.selected())
-                .and_then(|item| match item.key {
-                    CommentNavigatorKey::Remote { thread_idx } => Some(thread_idx),
-                    _ => None,
-                })
-        } else {
-            None
-        }
-        .or_else(
-            || match self.line_annotations.get(self.diff_state.cursor_line) {
-                Some(AnnotatedLine::RemoteThreadLine { thread_idx }) => Some(*thread_idx),
-                _ => None,
-            },
-        )
-        .or_else(|| {
-            let (line, side) = self.get_line_at_cursor()?;
-            let path = self
-                .diff_files
-                .get(self.diff_state.current_file_idx)?
-                .display_path();
-            self.forge_review_threads.iter().position(|thread| {
-                thread.path == path.to_string_lossy()
-                    && thread.line == Some(line)
-                    && matches!(
-                        (thread.side, side),
-                        (
-                            crate::forge::remote_comments::RemoteCommentSide::Right,
-                            LineSide::New
-                        ) | (
-                            crate::forge::remote_comments::RemoteCommentSide::Left,
-                            LineSide::Old
-                        )
-                    )
-            })
-        })
-        .ok_or_else(|| TuicrError::Forge("No review thread at cursor".to_string()))?;
-
-        let thread_id = self
-            .forge_review_threads
-            .get(thread_idx)
-            .map(|thread| thread.id.clone())
-            .ok_or_else(|| TuicrError::Forge("No review thread at cursor".to_string()))?;
-        let details = match self.pr_info.as_ref() {
-            Some(info) => info.details.clone(),
-            None => crate::forge::traits::PullRequestDetails {
-                repository: pr.key.repository.clone(),
-                number: pr.key.number,
-                title: pr.title.clone(),
-                url: pr.url.clone(),
-                state: pr.state.clone(),
-                is_draft: false,
-                author: None,
-                head_ref_name: pr.head_ref_name.clone(),
-                base_ref_name: pr.base_ref_name.clone(),
-                head_sha: pr.key.head_sha.clone(),
-                base_sha: pr.base_sha.clone(),
-                body: String::new(),
-                updated_at: None,
-                closed: pr.closed,
-                merged_at: None,
-                diff_start_sha: None,
-            },
-        };
-        let backend = self
-            .forge_backend
-            .as_deref()
-            .ok_or_else(|| TuicrError::UnsupportedOperation("Not in PR mode".to_string()))?;
-        backend.resolve_thread(&details, &thread_id, resolved)?;
-        self.forge_review_threads[thread_idx].is_resolved = resolved;
-        self.rebuild_annotations();
-        self.diff_state.cursor_line = self.diff_state.cursor_line.min(self.max_cursor_line());
-        self.ensure_cursor_visible();
-        self.set_message(if resolved {
-            "Thread resolved"
-        } else {
-            "Thread reopened"
-        });
-        Ok(())
-    }
-
     /// Re-enter PR mode after we've already opened a PR via the selector.
     /// Used by the selector → PR open path and by `:reload` in PR mode.
     pub fn enter_pr_diff_mode(
@@ -441,9 +353,7 @@ impl App {
                 diff_start_sha: None,
             };
             let outcome = backend
-                .and_then(|backend| {
-                    backend.get_pull_request_commit_range_diff(&details, &start_sha, &end_sha)
-                })
+                .get_pull_request_commit_range_diff(&details, &start_sha, &end_sha)
                 .map_err(|e| e.to_string());
             let _ = tx.send(PrRangeReloadEvent::Done {
                 request,
@@ -590,9 +500,7 @@ impl App {
             );
             let target =
                 PullRequestTarget::with_repository(repository, pr_number, pr_number.to_string());
-            let outcome = backend
-                .and_then(|backend| fetch_pr_data(backend.as_ref(), target))
-                .map_err(|e| e.to_string());
+            let outcome = fetch_pr_data(backend.as_ref(), target).map_err(|e| e.to_string());
             let _ = tx.send(PrReloadEvent::Done {
                 request,
                 result: outcome,
@@ -677,7 +585,7 @@ impl App {
                 self.show_pr_comments,
             );
             let previous_message = self.message.clone();
-            self.enter_pr_diff_mode(backend?, opened)?;
+            self.enter_pr_diff_mode(backend, opened)?;
             self.spawn_pr_threads_fetch(&details_for_threads, local_checkout);
             if self.message == previous_message {
                 self.set_message("Reloaded PR at new head".to_string());
@@ -736,7 +644,7 @@ impl App {
             self.show_pr_checks,
             self.show_pr_comments,
         );
-        self.reload_pull_request_with_backend(backend?, local_checkout)
+        self.reload_pull_request_with_backend(backend, local_checkout)
     }
 
     /// Inner reload path. Takes the forge backend as a parameter so tests
@@ -825,6 +733,7 @@ impl App {
 
         let show_pr_checks = self.show_pr_checks;
         let show_pr_comments = self.show_pr_comments;
+        let local_checkout = self.local_checkout_for(&origin);
         std::thread::spawn(move || {
             // Canonical resolution (fork parent lookup) is GitHub-only.
             let canonical = if skip_resolution || origin.kind != ForgeKind::GitHub {
@@ -835,11 +744,12 @@ impl App {
                 let runner = SystemGhRunner;
                 resolve_canonical_repository(&origin, override_repo.as_ref(), &runner)
             };
-            let backend = create_forge_backend(&canonical, None, show_pr_checks, show_pr_comments);
+            let backend =
+                create_forge_backend(&canonical, local_checkout, show_pr_checks, show_pr_comments);
             let query =
                 PullRequestListQuery::first_page_with_scope(canonical.clone(), PR_PAGE_SIZE, scope);
             let result = backend
-                .and_then(|backend| backend.list_pull_requests(query))
+                .list_pull_requests(query)
                 .map(|page| (page.pull_requests, page.has_more))
                 .map_err(|err| err.to_string());
             let _ = tx.send(PrLoadEvent::Initial { canonical, result });
@@ -861,8 +771,14 @@ impl App {
 
         let show_pr_checks = self.show_pr_checks;
         let show_pr_comments = self.show_pr_comments;
+        let local_checkout = self.local_checkout_for(&repository);
         std::thread::spawn(move || {
-            let backend = create_forge_backend(&repository, None, show_pr_checks, show_pr_comments);
+            let backend = create_forge_backend(
+                &repository,
+                local_checkout,
+                show_pr_checks,
+                show_pr_comments,
+            );
             let query = PullRequestListQuery {
                 repository,
                 already_loaded,
@@ -870,7 +786,7 @@ impl App {
                 scope,
             };
             let result = backend
-                .and_then(|backend| backend.list_pull_requests(query))
+                .list_pull_requests(query)
                 .map(|page| (page.pull_requests, page.has_more))
                 .map_err(|err| err.to_string());
             let _ = tx.send(PrLoadEvent::LoadMore(result));
@@ -900,9 +816,11 @@ impl App {
                     // to its upstream parent. Promote App state to the
                     // resolved repo so every PR-related call (open, threads,
                     // submit, load-more) targets the canonical from here on.
-                    self.pr_tab.apply_canonical(canonical.clone());
-                    self.forge_repository = Some(canonical);
-                    self.canonical_resolved = true;
+                    if self.pr_tab.source() == crate::forge::selector::PullRequestSource::Forge {
+                        self.pr_tab.apply_canonical(canonical.clone());
+                        self.forge_repository = Some(canonical);
+                        self.canonical_resolved = true;
+                    }
                     let error = result.as_ref().err().cloned();
                     self.pr_tab.apply_initial_load(result);
                     if let Some(error) = error {
@@ -1034,9 +952,7 @@ impl App {
             );
             let target =
                 PullRequestTarget::with_repository(summary_repo, pr_number, pr_number.to_string());
-            let outcome = backend
-                .and_then(|backend| fetch_pr_data(backend.as_ref(), target))
-                .map_err(|e| e.to_string());
+            let outcome = fetch_pr_data(backend.as_ref(), target).map_err(|e| e.to_string());
             let _ = tx.send(PrOpenEvent::Done {
                 request,
                 result: outcome,
@@ -1129,7 +1045,7 @@ impl App {
             self.show_pr_comments,
         );
         let previous_message = self.message.clone();
-        self.enter_pr_diff_mode(backend?, opened)?;
+        self.enter_pr_diff_mode(backend, opened)?;
         // Kick the remote-thread fetch off on a fresh background thread.
         // The diff view is already up; threads fade in once they land.
         self.spawn_pr_threads_fetch(&details, local_checkout);
@@ -1171,20 +1087,12 @@ impl App {
                 show_pr_checks,
                 show_pr_comments,
             );
-            let (threads, summaries) = match backend {
-                Ok(backend) => (
-                    backend
-                        .list_review_threads(&details_clone)
-                        .map_err(|e| e.to_string()),
-                    backend
-                        .list_review_summaries(&details_clone)
-                        .map_err(|e| e.to_string()),
-                ),
-                Err(error) => {
-                    let message = error.to_string();
-                    (Err(message.clone()), Err(message))
-                }
-            };
+            let threads = backend
+                .list_review_threads(&details_clone)
+                .map_err(|e| e.to_string());
+            let summaries = backend
+                .list_review_summaries(&details_clone)
+                .map_err(|e| e.to_string());
             let _ = tx.send(PrThreadsEvent::Done {
                 repository,
                 pr_number,

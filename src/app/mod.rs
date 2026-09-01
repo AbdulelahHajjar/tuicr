@@ -46,30 +46,25 @@ fn create_forge_backend(
     local_checkout: Option<PathBuf>,
     show_pr_checks: bool,
     show_pr_comments: bool,
-) -> Result<Box<dyn ForgeBackend>> {
+) -> Box<dyn ForgeBackend> {
     use crate::forge::traits::ForgeKind;
     match repo.kind {
         ForgeKind::Local => {
             use crate::forge::local::LocalForgeBackend;
-            let checkout = local_checkout.ok_or_else(|| {
-                TuicrError::Forge("Local pull requests require a checkout path".to_string())
-            })?;
-            Ok(Box::new(LocalForgeBackend::new(repo.clone(), checkout)?))
+            Box::new(LocalForgeBackend::new(repo.clone(), local_checkout))
         }
         ForgeKind::GitHub => {
             use crate::forge::github::gh::GitHubGhBackend;
-            Ok(Box::new(
+            Box::new(
                 GitHubGhBackend::new(Some(repo.clone()))
                     .with_local_checkout(local_checkout)
                     .with_pr_checks(show_pr_checks)
                     .with_pr_comments(show_pr_comments),
-            ))
+            )
         }
         ForgeKind::GitLab => {
             use crate::forge::gitlab::GitLabGlabBackend;
-            Ok(Box::new(
-                GitLabGlabBackend::new(Some(repo.clone())).with_local_checkout(local_checkout),
-            ))
+            Box::new(GitLabGlabBackend::new(Some(repo.clone())).with_local_checkout(local_checkout))
         }
         ForgeKind::Gitea => {
             use crate::forge::gitea::GiteaTeaBackend;
@@ -82,15 +77,15 @@ fn create_forge_backend(
         }
         ForgeKind::Bitbucket => {
             use crate::forge::bitbucket::BitbucketBktBackend;
-            Ok(Box::new(
+            Box::new(
                 BitbucketBktBackend::new(Some(repo.clone())).with_local_checkout(local_checkout),
-            ))
+            )
         }
         ForgeKind::AzureDevOps => {
             use crate::forge::azure::AzureDevOpsBackend;
-            Ok(Box::new(
+            Box::new(
                 AzureDevOpsBackend::new(Some(repo.clone())).with_local_checkout(local_checkout),
-            ))
+            )
         }
         ForgeKind::Gerrit => {
             use crate::forge::gerrit::GerritBackend;
@@ -1823,11 +1818,13 @@ mod init;
 mod modes;
 mod navigation;
 mod pr;
+mod pr_startup;
 mod reviewed;
 mod search;
 mod session;
 pub mod sessions_tab;
 mod submit;
+mod thread_resolution;
 mod tree;
 mod visual;
 

@@ -115,6 +115,7 @@ pub enum Action {
     BeginTargetFilter,
     /// Toggle PR tab between all open PRs and PRs awaiting your review (`r`).
     TogglePrReviewRequestedFilter,
+    TogglePrSource,
 
     // Submit resolver
     /// Move resolver cursor down (`j` / Down).
@@ -504,6 +505,7 @@ fn map_commit_select_mode_with_q_quits(key: KeyEvent, q_quits: bool) -> Action {
         (KeyCode::BackTab, _) => Action::TargetSelectorTabPrev,
         (KeyCode::Char('/'), _) => Action::BeginTargetFilter,
         (KeyCode::Char('r'), KeyModifiers::NONE) => Action::TogglePrReviewRequestedFilter,
+        (KeyCode::Char('l'), KeyModifiers::NONE) => Action::TogglePrSource,
         _ => Action::None,
     }
 }
@@ -1051,6 +1053,14 @@ mod tests {
         let action = map_commit_select_mode(key(KeyCode::Char('r')));
         // then
         assert_eq!(action, Action::TogglePrReviewRequestedFilter);
+    }
+
+    #[test]
+    fn should_map_l_to_pull_request_source_in_commit_select_mode() {
+        assert_eq!(
+            map_commit_select_mode(key(KeyCode::Char('l'))),
+            Action::TogglePrSource
+        );
     }
 
     #[test]

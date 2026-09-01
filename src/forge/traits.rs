@@ -328,6 +328,13 @@ impl PullRequestDetails {
     }
 }
 
+/// Current state of a pull request head when a backend supports following it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullRequestHeadStatus {
+    Open(String),
+    Closed,
+}
+
 /// Stable identity for a PR review session.
 ///
 /// Sessions are keyed by forge kind + host + owner/repo + PR number + head
@@ -562,6 +569,10 @@ pub trait ForgeBackend {
         Ok(PullRequestInfo::from_details(details))
     }
     fn get_pull_request_diff(&self, pr: &PullRequestDetails) -> Result<Vec<FilePatch>>;
+    /// Return the current head state when this backend supports live following.
+    fn head_status(&self, _pr: &PullRequestDetails) -> Result<Option<PullRequestHeadStatus>> {
+        Ok(None)
+    }
     /// Fetch the requested file lines from the forge for context expansion.
     /// Implementations may optimize by reading from a local checkout when
     /// available; the trait does not require that path.

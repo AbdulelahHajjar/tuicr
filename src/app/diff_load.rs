@@ -1032,7 +1032,13 @@ impl App {
         let now = Instant::now();
         match self.diff_watch_tick(now) {
             DiffWatchTick::Idle | DiffWatchTick::NotDue => {}
-            DiffWatchTick::Defer(interval) => self.next_diff_watch_at = now + interval,
+            DiffWatchTick::Defer(interval) => {
+                if matches!(self.diff_source, DiffSource::PullRequest(_)) {
+                    self.next_local_pr_follow_at = now + interval;
+                } else {
+                    self.next_diff_watch_at = now + interval;
+                }
+            }
             DiffWatchTick::Fetch(interval) => {
                 self.next_diff_watch_at = now + interval;
                 self.spawn_diff_watch_reload();
@@ -1055,7 +1061,7 @@ impl App {
     /// tested without a worker running a real diff.
     pub(in crate::app) fn diff_watch_tick(&self, now: Instant) -> DiffWatchTick {
         if let DiffSource::PullRequest(pr) = &self.diff_source {
-            if pr.key.repository.kind != crate::forge::traits::ForgeKind::Local {
+            if pr.is_read_only() {
                 return DiffWatchTick::Idle;
             }
             let Some(interval) = self.local_pr_follow_interval else {
@@ -1064,23 +1070,50 @@ impl App {
             if now < self.next_local_pr_follow_at {
                 return DiffWatchTick::NotDue;
             }
-            if self.pr_reload_state.is_some() {
-                return DiffWatchTick::LocalPrUnchanged(interval);
+            if self.input_mode != InputMode::Normal
+                || self.pr_reload_state.is_some()
+                || self.pr_submit_state.is_some()
+                || self.pr_range_reload_state.is_some()
+            {
+                return DiffWatchTick::Defer(interval);
             }
-            let tip = self
-                .forge_backend
-                .as_deref()
-                .and_then(|backend| backend.local_checkout_path())
-                .and_then(|checkout| git2::Repository::open(checkout).ok())
-                .and_then(|git| {
-                    git.find_reference(&format!("refs/heads/{}", pr.head_ref_name))
-                        .ok()
-                        .and_then(|reference| reference.target())
+            let Some(backend) = self.forge_backend.as_deref() else {
+                return DiffWatchTick::LocalPrUnchanged(interval);
+            };
+            let details = self
+                .pr_info
+                .as_ref()
+                .map(|info| info.details.clone())
+                .unwrap_or_else(|| crate::forge::traits::PullRequestDetails {
+                    repository: pr.key.repository.clone(),
+                    number: pr.key.number,
+                    title: pr.title.clone(),
+                    url: pr.url.clone(),
+                    state: pr.state.clone(),
+                    is_draft: false,
+                    author: None,
+                    head_ref_name: pr.head_ref_name.clone(),
+                    base_ref_name: pr.base_ref_name.clone(),
+                    head_sha: pr.key.head_sha.clone(),
+                    base_sha: pr.base_sha.clone(),
+                    body: String::new(),
+                    updated_at: None,
+                    closed: pr.closed,
+                    merged_at: None,
+                    diff_start_sha: None,
                 });
-            return if tip.is_some_and(|tip| Some(tip.to_string()) != self.current_pr_head) {
-                DiffWatchTick::FollowLocalPr(interval)
-            } else {
-                DiffWatchTick::LocalPrUnchanged(interval)
+            return match backend.head_status(&details) {
+                Ok(Some(crate::forge::traits::PullRequestHeadStatus::Open(head)))
+                    if Some(&head) != self.current_pr_head.as_ref() =>
+                {
+                    DiffWatchTick::FollowLocalPr(interval)
+                }
+                Ok(Some(crate::forge::traits::PullRequestHeadStatus::Closed)) => {
+                    DiffWatchTick::FollowLocalPr(interval)
+                }
+                Ok(None | Some(crate::forge::traits::PullRequestHeadStatus::Open(_))) | Err(_) => {
+                    DiffWatchTick::LocalPrUnchanged(interval)
+                }
             };
         }
         let Some(interval) = self.diff_watch_interval else {

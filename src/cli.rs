@@ -151,8 +151,9 @@ enum Subcmd {
     /// Open the interactive TUI.
     Tui(TuiCommand),
     /// Review a GitHub pull request or GitLab merge request.
-    #[command(visible_alias = "mr")]
     Pr(PrCommand),
+    /// Review a GitLab merge request.
+    Mr(MrCommand),
     /// Inspect or update persisted review sessions.
     Review {
         #[command(subcommand)]
@@ -180,8 +181,9 @@ struct TuiCommand {
 #[derive(Subcommand, Debug, Clone)]
 enum TuiSubcmd {
     /// Review a GitHub pull request or GitLab merge request in the TUI.
-    #[command(visible_alias = "mr")]
     Pr(PrCommand),
+    /// Review a GitLab merge request in the TUI.
+    Mr(MrCommand),
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -192,6 +194,15 @@ struct PrCommand {
     /// Local base ref. Used only when the target is a local branch.
     #[arg(long, value_name = "REF")]
     base: Option<String>,
+
+    #[command(flatten)]
+    options: TuiOptions,
+}
+
+#[derive(Args, Debug, Clone)]
+struct MrCommand {
+    /// Merge request number or URL.
+    target: String,
 
     #[command(flatten)]
     options: TuiOptions,
@@ -315,6 +326,16 @@ impl From<Cli> for CliArgs {
                     None,
                     false,
                 ),
+                Some(TuiSubcmd::Mr(mr)) => (
+                    cli.tui_options.merge(command.options).merge(mr.options),
+                    Some(PrInvocation {
+                        target: Some(mr.target),
+                        base: None,
+                    }),
+                    None,
+                    None,
+                    false,
+                ),
                 None => (
                     cli.tui_options.merge(command.options),
                     None,
@@ -328,6 +349,16 @@ impl From<Cli> for CliArgs {
                 Some(PrInvocation {
                     target: pr.target,
                     base: pr.base,
+                }),
+                None,
+                None,
+                false,
+            ),
+            Some(Subcmd::Mr(mr)) => (
+                cli.tui_options.merge(mr.options),
+                Some(PrInvocation {
+                    target: Some(mr.target),
+                    base: None,
                 }),
                 None,
                 None,
@@ -787,6 +818,18 @@ mod tests {
     fn should_parse_mr_alias_like_pr() {
         let parsed = parse_for_test(&["tuicr", "mr", "125"]).expect("parse should succeed");
         assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
+    }
+
+    #[test]
+    fn should_require_mr_target() {
+        let error = parse_for_test(&["tuicr", "mr"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn should_reject_base_for_mr() {
+        let error = parse_for_test(&["tuicr", "mr", "--base", "main", "125"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 
     #[test]

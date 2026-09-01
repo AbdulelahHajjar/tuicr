@@ -1,22 +1,9 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-struct PrDisplayOptions {
-    show_checks: bool,
-    show_comments: bool,
-}
-
-fn parse_forge_pr_target(target: &str) -> Option<crate::forge::traits::PullRequestTarget> {
-    use crate::forge::azure::az::parse_pull_request_target_azure;
-    use crate::forge::bitbucket::bkt::parse_pull_request_target_bitbucket;
-    use crate::forge::github::gh::parse_pull_request_target;
-    use crate::forge::gitlab::glab::parse_pull_request_target_gitlab;
-
-    parse_pull_request_target_bitbucket(target)
-        .or_else(|_| parse_pull_request_target(target))
-        .or_else(|_| parse_pull_request_target_gitlab(target))
-        .or_else(|_| parse_pull_request_target_azure(target))
-        .ok()
+pub(super) struct PrDisplayOptions {
+    pub(super) show_checks: bool,
+    pub(super) show_comments: bool,
 }
 
 impl App {
@@ -638,6 +625,10 @@ impl App {
         app.populate_file_line_count_cache();
         app.rebuild_annotations();
         app.detect_forge_repository();
+        app.pr_tab = PullRequestsTab::new_with_local(
+            app.forge_repository.clone(),
+            app.local_pull_request_repository(),
+        );
         Ok(app)
     }
 
@@ -849,7 +840,6 @@ impl App {
         commit_selection: CommitSelectionStart,
         display_options: PrDisplayOptions,
     ) -> Result<Self> {
-        use crate::forge::pr_open::open_pull_request;
         use crate::forge::traits::ForgeKind;
 
         // Bitbucket first: its URL shape (`/pull-requests/<n>`) is distinct,
@@ -857,9 +847,26 @@ impl App {
         // handles numeric / `owner/repo#N` / GitHub URLs, GitLab handles
         // `/-/merge_requests/<n>`, and an Azure DevOps PR URL falls through to
         // the Azure parser last.
-        let target = invocation.target.as_deref();
-        let parsed_remote = target.and_then(parse_forge_pr_target);
-        validate_pr_base_target(parsed_remote.is_some(), invocation.base.as_deref())?;
+        let local_repo_root = std::env::current_dir().ok();
+        let Some(parsed) = invocation
+            .target
+            .as_deref()
+            .and_then(super::pr_startup::parse_forge_pr_target)
+        else {
+            return Self::new_from_local_pr_target(
+                super::pr_startup::PrStartupOptions {
+                    theme,
+                    comment_type_configs,
+                    output_to_stdout,
+                    repo_url_override,
+                    commit_selection,
+                    display: display_options,
+                    local_repo_root,
+                },
+                invocation,
+            );
+        };
+        super::pr_startup::validate_pr_base_target(true, invocation.base.as_deref())?;
 
         // Resolution order when the target lacks an explicit repo
         // (`tuicr pr 125`):
@@ -870,177 +877,58 @@ impl App {
         //   3. detected local `origin` as the final fallback
         // URL- and owner-repo-hash targets carry their own repository, which
         // wins over all of the above since it's PR-specific.
-        let local_repo_root = std::env::current_dir().ok();
-        let (parsed, target_repo, local_checkout_for_target) = if let Some(parsed) = parsed_remote {
-            let detected_repo = local_repo_root
-                .as_deref()
-                .and_then(crate::forge::detect_forge_repository);
-            let canonical_repo = detected_repo.as_ref().and_then(|origin| {
-                if origin.kind == ForgeKind::GitHub {
-                    use crate::forge::canonical::resolve_canonical_repository;
-                    use crate::forge::github::gh::SystemGhRunner;
-                    Some(resolve_canonical_repository(
-                        origin,
-                        repo_url_override.as_ref(),
-                        &SystemGhRunner,
-                    ))
-                } else {
-                    None
-                }
-            });
-            let target_repo = parsed
-                .repository
-                .clone()
-                .or_else(|| repo_url_override.clone())
-                .or(canonical_repo)
-                .or(detected_repo)
-                .ok_or_else(|| {
-                    TuicrError::Forge(
-                        "tuicr pr <number> requires a local forge remote. \
-                         Use owner/repo#N or a full PR URL outside a checkout."
-                            .to_string(),
-                    )
-                })?;
-            let local_checkout = local_repo_root
-                .as_deref()
-                .and_then(|root| crate::forge::local_checkout_for_repo(root, &target_repo));
-            (parsed, target_repo, local_checkout)
-        } else {
-            let checkout = local_repo_root
-                .as_deref()
-                .ok_or(TuicrError::NotARepository)?;
-            let resolved = crate::forge::local::target::resolve_local_target(
-                checkout,
-                target,
-                invocation.base.as_deref(),
-            )?;
-            (
-                resolved.target,
-                resolved.repository,
-                Some(resolved.checkout),
-            )
-        };
+        let detected_repo = local_repo_root
+            .as_deref()
+            .and_then(crate::forge::detect_forge_repository);
 
-        let backend = create_forge_backend(
-            &target_repo,
-            local_checkout_for_target.clone(),
-            display_options.show_checks,
-            display_options.show_comments,
-        )?;
-        let highlighter = theme.syntax_highlighter();
-        let opened = open_pull_request(
-            backend.as_ref(),
+        // Canonical resolution (fork parent lookup) only works for GitHub.
+        let canonical_repo = detected_repo.as_ref().and_then(|origin| {
+            if origin.kind == ForgeKind::GitHub {
+                use crate::forge::canonical::resolve_canonical_repository;
+                use crate::forge::github::gh::SystemGhRunner;
+                Some(resolve_canonical_repository(
+                    origin,
+                    repo_url_override.as_ref(),
+                    &SystemGhRunner,
+                ))
+            } else {
+                None
+            }
+        });
+        let target_repo = parsed
+            .repository
+            .clone()
+            .or_else(|| repo_url_override.clone())
+            .or_else(|| canonical_repo.clone())
+            .or_else(|| detected_repo.clone())
+            .ok_or_else(|| {
+                TuicrError::Forge(
+                    "tuicr pr <number> requires a local forge remote. \
+                     Use owner/repo#N or a full PR URL outside a checkout."
+                        .to_string(),
+                )
+            })?;
+
+        // Use the local checkout for `.tuicrignore` only when it matches the
+        // PR's target repository — using a foreign repo's checkout would
+        // mis-filter the PR diff.
+        let local_checkout_for_target = local_repo_root
+            .as_deref()
+            .and_then(|root| crate::forge::local_checkout_for_repo(root, &target_repo));
+
+        Self::new_from_resolved_pr_target(
+            super::pr_startup::PrStartupOptions {
+                theme,
+                comment_type_configs,
+                output_to_stdout,
+                repo_url_override,
+                commit_selection,
+                display: display_options,
+                local_repo_root,
+            },
             parsed,
-            local_checkout_for_target.as_deref(),
-            highlighter,
-        )?;
-        let opened = Self::opened_pr_with_persisted_session(opened)?;
-
-        let pr_source = PullRequestDiffSource::from_details(&opened.details);
-        let diff_source = DiffSource::PullRequest(Box::new(pr_source));
-        let vcs_info = VcsInfo {
-            root_path: opened.session.repo_path.clone(),
-            head_commit: opened.details.head_sha.clone(),
-            branch_name: Some(opened.details.head_ref_name.clone()),
-            vcs_type: VcsType::File,
-        };
-        // FileBackend acts as a no-op VCS placeholder; PR context expansion
-        // routes through the forge backend, not the VCS box.
-        let vcs: Box<dyn VcsBackend> = Box::new(PrNoopVcs::new(vcs_info.clone()));
-
-        // Snapshot the PR details before consuming `opened` so we can kick
-        // off the remote-thread fetch after `Self::build` returns.
-        let details_for_threads = opened.details.clone();
-        let commits_for_selector = opened.commits.clone();
-        let review_metadata = opened.review_metadata.clone();
-        let mut app = Self::build(
-            vcs,
-            vcs_info,
-            theme,
-            comment_type_configs,
-            output_to_stdout,
-            opened.diff_files,
-            opened.session,
-            diff_source,
-            InputMode::Normal,
-            Vec::new(),
-            None,
-            repo_url_override,
-        )?;
-        app.show_pr_checks = display_options.show_checks;
-        app.show_pr_comments = display_options.show_comments;
-
-        // `build` sees the PR's synthetic root, so record the real launch
-        // directory here — PRs opened later from the PR tab resolve their
-        // local checkout from it.
-        app.local_repo_root = local_repo_root;
-        // Wire the forge backend so context expansion routes through it.
-        app.forge_backend = Some(backend);
-        app.forge_repository = Some(target_repo);
-        app.pr_info = Some(opened.pr_info);
-        // PR open establishes the target repo directly; no further canonical
-        // resolution needed on PR-tab entry (which won't happen anyway since
-        // the user came straight from CLI into PR diff mode).
-        app.canonical_resolved = true;
-        app.current_pr_head = Some(details_for_threads.head_sha.clone());
-        app.commit_selection_start = commit_selection;
-        let since_last_review_message =
-            app.apply_pr_commit_selector(commits_for_selector, review_metadata);
-        if matches!(&app.diff_source, DiffSource::PullRequest(_))
-            && let Some(range) = app.commit_selection_range
-            && !app.pr_commits.is_empty()
-            && (range.0 > 0 || range.1 + 1 < app.pr_commits.len())
-        {
-            app.spawn_pr_range_reload();
-        }
-        if let DiffSource::PullRequest(pr) = &app.diff_source.clone()
-            && pr.is_read_only()
-        {
-            let reason = pr.read_only_reason().unwrap_or("read only");
-            app.set_warning(format!("This PR is {reason} — review is read-only"));
-        } else if let Some(message) = since_last_review_message {
-            app.set_message(message);
-        }
-        // Spawn thread-fetch on startup; the main event loop will drain
-        // the receiver via `poll_pr_threads_events` once it begins.
-        app.spawn_pr_threads_fetch(&details_for_threads, local_checkout_for_target);
-        Ok(app)
-    }
-}
-
-fn validate_pr_base_target(is_forge_target: bool, base: Option<&str>) -> Result<()> {
-    if is_forge_target && base.is_some() {
-        return Err(TuicrError::Forge(
-            "--base cannot be used with a forge pull request target".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod pr_target_tests {
-    use super::{parse_forge_pr_target, validate_pr_base_target};
-
-    #[test]
-    fn should_classify_numeric_target_as_existing_forge_pr() {
-        let target = parse_forge_pr_target("125").unwrap();
-
-        assert_eq!(target.number, 125);
-        assert!(target.repository.is_none());
-    }
-
-    #[test]
-    fn should_leave_branch_name_for_local_target_resolution() {
-        assert!(parse_forge_pr_target("feature/local-forge").is_none());
-    }
-
-    #[test]
-    fn should_reject_base_with_forge_target() {
-        let error = validate_pr_base_target(true, Some("main")).unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "--base cannot be used with a forge pull request target"
-        );
+            target_repo,
+            local_checkout_for_target,
+        )
     }
 }

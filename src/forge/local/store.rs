@@ -204,14 +204,10 @@ impl LocalForgeStore {
             let mut reviews = self.load_reviews(number)?;
             let mut threads = self.load_threads(number)?;
             let submitted_at = Utc::now();
-            let pending = (event != "PENDING")
-                .then(|| {
-                    reviews
-                        .reviews
-                        .iter_mut()
-                        .find(|review| review.event == "PENDING" && review.author == author)
-                })
-                .flatten();
+            let pending = reviews
+                .reviews
+                .iter_mut()
+                .find(|review| review.event == "PENDING" && review.author == author);
             let review = if let Some(pending) = pending {
                 pending.event = event.to_string();
                 if !body.is_empty() {
@@ -309,9 +305,20 @@ impl LocalForgeStore {
 fn store_directory_name(repository: &ForgeRepository) -> String {
     format!(
         "{}__{}",
-        repository.owner.replace('/', "-"),
-        repository.name
+        sanitize_store_component(&repository.owner),
+        sanitize_store_component(&repository.name)
     )
+}
+
+fn sanitize_store_component(value: &str) -> String {
+    let mut value = value.replace(['/', '\\'], "-");
+    while value.contains("..") {
+        value = value.replace("..", "-");
+    }
+    if value.starts_with('.') {
+        value.replace_range(..1, "-");
+    }
+    value
 }
 
 fn load_json<T>(path: &Path) -> Result<T>
@@ -376,10 +383,13 @@ mod tests {
     }
 
     #[test]
-    fn should_sanitize_owner_slashes_in_store_directory_name() {
+    fn should_sanitize_repository_fields_in_store_directory_name() {
         assert_eq!(
-            store_directory_name(&ForgeRepository::local("org/team", "project")),
-            "org-team__project"
+            store_directory_name(&ForgeRepository::local(
+                "../org\\team",
+                ".project/../name\\part"
+            )),
+            "--org-team__-project---name-part"
         );
     }
 
@@ -415,6 +425,51 @@ mod tests {
         assert_eq!(reviews[0].body, "final");
         assert_eq!(submitted.id, draft.id);
         assert_eq!(store.threads(1).unwrap()[0].review_id, draft.id);
+    }
+
+    #[test]
+    fn should_reuse_pending_review_across_drafts_and_submission() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store.open_pull("feature", "main", "aaaa", false).unwrap();
+        let first = thread("first");
+        let second = thread("second");
+
+        let draft = store
+            .add_review(1, "PENDING", "first body", "aaaa", "author", vec![first])
+            .unwrap();
+        let second_draft = store
+            .add_review(1, "PENDING", "second body", "bbbb", "author", vec![second])
+            .unwrap();
+        let approved = store
+            .add_review(1, "APPROVE", "", "cccc", "author", Vec::new())
+            .unwrap();
+
+        assert_eq!(draft.id, second_draft.id);
+        assert_eq!(draft.id, approved.id);
+        assert_eq!(store.reviews(1).unwrap().len(), 1);
+        assert_eq!(approved.event, "APPROVE");
+        assert_eq!(approved.body, "second body");
+        let threads = store.threads(1).unwrap();
+        assert_eq!(threads.len(), 2);
+        assert!(threads.iter().all(|thread| thread.review_id == draft.id));
+    }
+
+    fn thread(id: &str) -> LocalThread {
+        LocalThread {
+            id: id.to_string(),
+            path: "src/lib.rs".to_string(),
+            side: "RIGHT".to_string(),
+            original_line: 1,
+            original_commit: "aaaa".to_string(),
+            base_commit: "base".to_string(),
+            line_text: "line".to_string(),
+            created_at: Utc::now(),
+            is_resolved: false,
+            resolved_at: None,
+            review_id: 0,
+            comments: Vec::new(),
+        }
     }
 
     #[test]
