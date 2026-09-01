@@ -108,6 +108,8 @@ const COMMAND_SPECS: &[CommandSpec] = &[
         &["comments hide"],
         CommandKind::Comments(PrCommentsVisibility::Hide),
     ),
+    CommandSpec::new(&["resolve"], CommandKind::ResolveThread(true)),
+    CommandSpec::new(&["unresolve"], CommandKind::ResolveThread(false)),
 ];
 
 /// CommandSpec is the single registry entry used by both completion and
@@ -160,6 +162,7 @@ enum CommandKind {
     SubmitPicker,
     Submit(SubmitEvent),
     Comments(PrCommentsVisibility),
+    ResolveThread(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -995,6 +998,23 @@ fn dispatch_command(app: &mut App, kind: CommandKind) -> CommandAfterDispatch {
             set_remote_comments_visibility(app, visibility);
             CommandAfterDispatch::ExitCommandMode
         }
+        CommandKind::ResolveThread(resolved) => {
+            if !matches!(app.diff_source, app::DiffSource::PullRequest(_)) {
+                app.set_warning(if resolved {
+                    ":resolve only applies in PR mode"
+                } else {
+                    ":unresolve only applies in PR mode"
+                });
+            } else if let Err(error) = app.resolve_review_thread_at_cursor(resolved) {
+                match error {
+                    crate::error::TuicrError::UnsupportedOperation(message) => {
+                        app.set_error(message)
+                    }
+                    error => app.set_error(error.to_string()),
+                }
+            }
+            CommandAfterDispatch::ExitCommandMode
+        }
     }
 }
 
@@ -1819,7 +1839,7 @@ pub fn handle_submit_confirm_action(app: &mut App, action: Action) {
 
 #[cfg(test)]
 mod command_tests {
-    use super::{CommandKind, command_spec_for};
+    use super::{COMMAND_SPECS, CommandCompleter, CommandKind, command_spec_for};
 
     #[test]
     fn parses_relative_line_number_commands() {
@@ -1843,6 +1863,28 @@ mod command_tests {
             command_spec_for("copy-url").map(|spec| spec.kind),
             Some(CommandKind::CopyUrl)
         );
+    }
+
+    #[test]
+    fn parses_resolve_commands() {
+        assert_eq!(
+            command_spec_for("resolve").map(|spec| spec.kind),
+            Some(CommandKind::ResolveThread(true))
+        );
+        assert_eq!(
+            command_spec_for("unresolve").map(|spec| spec.kind),
+            Some(CommandKind::ResolveThread(false))
+        );
+    }
+
+    #[test]
+    fn completes_resolve_commands() {
+        let names = CommandCompleter::new(COMMAND_SPECS)
+            .command_names()
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"resolve"));
+        assert!(names.contains(&"unresolve"));
     }
 
     #[test]

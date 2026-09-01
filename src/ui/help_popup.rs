@@ -786,6 +786,20 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
         ]),
         Line::from(vec![
             Span::styled(
+                "  :resolve        ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Resolve the review thread at the cursor (Local PR)"),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  :unresolve      ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Reopen the review thread at the cursor (Local PR)"),
+        ]),
+        Line::from(vec![
+            Span::styled(
                 "  :submit       ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),

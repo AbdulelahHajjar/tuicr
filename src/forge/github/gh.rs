@@ -2066,6 +2066,7 @@ Match host github-work
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: "abcdef1234567890",
+            diff_start_sha: None,
             body: "review body",
             comments: &comments,
         };
@@ -2115,6 +2116,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Draft,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2144,6 +2146,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2175,6 +2178,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2207,6 +2211,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2232,6 +2237,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2258,6 +2264,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2286,6 +2293,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2317,6 +2325,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },
@@ -2352,6 +2361,7 @@ Match host github-work
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "sha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },

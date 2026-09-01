@@ -102,6 +102,107 @@ fn test_pull_request_source() -> DiffSource {
     }))
 }
 
+fn local_pull_request_source(head: &str) -> DiffSource {
+    DiffSource::PullRequest(Box::new(PullRequestDiffSource {
+        key: PrSessionKey::new(ForgeRepository::local("owner", "repo"), 1, head.to_string()),
+        base_sha: "base".to_string(),
+        title: "local pr".to_string(),
+        url: "local:owner/repo/pull/1".to_string(),
+        head_ref_name: "feature".to_string(),
+        base_ref_name: "main".to_string(),
+        state: "OPEN".to_string(),
+        closed: false,
+        merged: false,
+    }))
+}
+
+struct CheckoutPathBackend(PathBuf);
+
+impl crate::forge::traits::ForgeBackend for CheckoutPathBackend {
+    fn list_pull_requests(
+        &self,
+        _query: crate::forge::traits::PullRequestListQuery,
+    ) -> Result<crate::forge::traits::PagedPullRequests> {
+        unreachable!()
+    }
+    fn get_pull_request(
+        &self,
+        _target: crate::forge::traits::PullRequestTarget,
+    ) -> Result<crate::forge::traits::PullRequestDetails> {
+        unreachable!()
+    }
+    fn get_pull_request_diff(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+    ) -> Result<Vec<crate::model::FilePatch>> {
+        unreachable!()
+    }
+    fn fetch_file_lines(
+        &self,
+        _request: crate::forge::traits::ForgeFileLinesRequest,
+    ) -> Result<Vec<DiffLine>> {
+        unreachable!()
+    }
+    fn list_review_threads(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+    ) -> Result<Vec<crate::forge::remote_comments::RemoteReviewThread>> {
+        unreachable!()
+    }
+    fn list_pull_request_commits(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+    ) -> Result<Vec<crate::forge::traits::PullRequestCommit>> {
+        unreachable!()
+    }
+    fn get_pull_request_commit_range_diff(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+        _start_sha: &str,
+        _end_sha: &str,
+    ) -> Result<Vec<crate::model::FilePatch>> {
+        unreachable!()
+    }
+    fn local_checkout_path(&self) -> Option<PathBuf> {
+        Some(self.0.clone())
+    }
+    fn create_review(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+        _request: crate::forge::traits::CreateReviewRequest<'_>,
+    ) -> Result<crate::forge::traits::GhCreateReviewResponse> {
+        unreachable!()
+    }
+}
+
+fn local_follow_app() -> (App, tempfile::TempDir, String) {
+    let temp = tempfile::tempdir().unwrap();
+    let git = git2::Repository::init(temp.path()).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+    let tree_id = {
+        let mut index = git.index().unwrap();
+        index.write_tree().unwrap()
+    };
+    let tree = git.find_tree(tree_id).unwrap();
+    let head = git
+        .commit(
+            Some("refs/heads/feature"),
+            &signature,
+            &signature,
+            "head",
+            &tree,
+            &[],
+        )
+        .unwrap()
+        .to_string();
+    let mut app = build_app(Vec::new(), local_pull_request_source("old"));
+    app.forge_backend = Some(Box::new(CheckoutPathBackend(temp.path().to_path_buf())));
+    app.current_pr_head = Some("old".to_string());
+    app.local_pr_follow_interval = Some(Duration::from_millis(500));
+    app.next_local_pr_follow_at = Instant::now() - Duration::from_millis(1);
+    (app, temp, head)
+}
+
 /// Hunks are left empty: most of these tests never render content.
 fn make_diff_file(path: &str, content_hash: u64) -> DiffFile {
     DiffFile {
@@ -244,6 +345,56 @@ fn should_not_spawn_for_pull_request_source() {
 
     assert!(!redraw);
     assert!(app.diff_watch_reload.is_none());
+}
+
+#[test]
+fn should_follow_local_pr_when_head_moves() {
+    let (app, _temp, _head) = local_follow_app();
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::FollowLocalPr(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn should_spawn_exactly_one_local_pr_reload_when_head_moves() {
+    let (mut app, _temp, _head) = local_follow_app();
+
+    app.poll_diff_watch_changes();
+    let first = app.pr_reload_state.clone().expect("reload spawned");
+    app.poll_diff_watch_changes();
+
+    assert_eq!(
+        app.pr_reload_state.as_ref().unwrap().started_at,
+        first.started_at
+    );
+}
+
+#[test]
+fn should_not_follow_local_pr_while_reload_is_in_flight() {
+    let (mut app, _temp, _head) = local_follow_app();
+    app.pr_reload_state = Some(PrReloadRequest {
+        repository: ForgeRepository::local("owner", "repo"),
+        pr_number: 1,
+        head_sha: "old".to_string(),
+        started_at: Instant::now(),
+        anchor: None,
+        restore_overview_cursor: None,
+    });
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::LocalPrUnchanged(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn should_disable_local_pr_follow_at_zero() {
+    let (mut app, _temp, _head) = local_follow_app();
+    app.set_local_pr_follow_interval_ms(0);
+
+    assert_eq!(app.diff_watch_tick(Instant::now()), DiffWatchTick::Idle);
 }
 
 #[test]

@@ -71,6 +71,7 @@ GitHub release asset after SHA-256 verification. Exact-version installs support 
 binaries; use the package manager's pinning workflow for Homebrew, Mise, or Nix. A `nix run`
 invocation is temporary rather than installed; rerun it to use the current flake, or use
 `nix profile install github:agavra/tuicr` for an installation that `tuicr update` can upgrade.
+The local-forge fork blocks `tuicr update`; update that build with `tuicr-fork-update`.
 
 ## Quick start
 
@@ -79,6 +80,9 @@ tuicr                       # Pick from a commit selector
 tuicr tui                   # Same TUI, explicit subcommand
 tuicr -w                    # Uncommitted changes (skip selector)
 tuicr -r main..HEAD         # Commit range
+tuicr pr                    # Current branch as a local pull request
+tuicr pr feature            # Another local branch
+tuicr pr --base main        # Current branch against an explicit base
 tuicr pr 125                # GitHub, Gitea, Bitbucket, or Azure DevOps PR, or Gerrit change
 tuicr pr 125 --remote up    # Use a named Git remote's fetch URL
 tuicr mr 125                # GitLab MR
@@ -143,6 +147,22 @@ When you're done reviewing, send your comments wherever the work continues.
 `:submit` opens a picker for Comment, Approve, Request changes, or Draft. Inline comments land
 on the right lines as a real PR review. Review-level comments become the review summary.
 Requires `gh` authenticated to the repo.
+
+### Local pull requests
+
+`tuicr pr` reviews the current branch against the repository's default branch without a remote
+service. Pass a branch to review it instead, or `--base <ref>` to choose the base. Reviews and
+threads live in tuicr's data directory; the backend never shells out or writes inside the checkout.
+It follows new commits on the head branch automatically. Use `:resolve` and `:unresolve` on a
+thread selected in the comment navigator or under the diff cursor.
+
+| Command | Action |
+|---------|--------|
+| `tuicr pr` | Review the current branch as a local pull request |
+| `tuicr pr <branch>` | Review another local branch |
+| `tuicr pr --base <ref> [<branch>]` | Override the local pull request's base reference |
+| `:resolve` | Resolve the thread at the cursor |
+| `:unresolve` | Reopen the thread at the cursor |
 
 ### To GitLab
 

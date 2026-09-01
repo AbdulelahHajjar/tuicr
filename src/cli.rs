@@ -186,7 +186,7 @@ enum TuiSubcmd {
 
 #[derive(Args, Debug, Clone, Default)]
 struct PrCommand {
-    /// PR target: <number>, <owner/repo#N>, or a PR URL.
+    /// Target: none for current branch, <branch>, <number>, <owner/repo#N>, or a PR URL.
     target: Option<String>,
 
     /// Local base ref. Used only when the target is a local branch.

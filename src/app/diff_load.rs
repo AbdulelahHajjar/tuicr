@@ -1004,6 +1004,17 @@ impl App {
         }
     }
 
+    pub fn set_local_pr_follow_interval_ms(&mut self, interval_ms: u64) {
+        match interval_ms {
+            0 => self.local_pr_follow_interval = None,
+            ms => {
+                let interval = Duration::from_millis(ms);
+                self.local_pr_follow_interval = Some(interval);
+                self.next_local_pr_follow_at = Instant::now() + interval;
+            }
+        }
+    }
+
     /// Periodically re-reads the local diff so uncommitted changes appear without
     /// pressing `:e`. Returns `true` when a redraw is needed.
     ///
@@ -1026,6 +1037,15 @@ impl App {
                 self.next_diff_watch_at = now + interval;
                 self.spawn_diff_watch_reload();
             }
+            DiffWatchTick::FollowLocalPr(interval) => {
+                self.next_local_pr_follow_at = now + interval;
+                if let Err(error) = self.spawn_pr_reload() {
+                    self.set_error(format!("Reload failed: {error}"));
+                }
+            }
+            DiffWatchTick::LocalPrUnchanged(interval) => {
+                self.next_local_pr_follow_at = now + interval;
+            }
         }
         redraw
     }
@@ -1034,6 +1054,35 @@ impl App {
     /// `self`, writes nothing and starts no thread, so the guard order can be
     /// tested without a worker running a real diff.
     pub(in crate::app) fn diff_watch_tick(&self, now: Instant) -> DiffWatchTick {
+        if let DiffSource::PullRequest(pr) = &self.diff_source {
+            if pr.key.repository.kind != crate::forge::traits::ForgeKind::Local {
+                return DiffWatchTick::Idle;
+            }
+            let Some(interval) = self.local_pr_follow_interval else {
+                return DiffWatchTick::Idle;
+            };
+            if now < self.next_local_pr_follow_at {
+                return DiffWatchTick::NotDue;
+            }
+            if self.pr_reload_state.is_some() {
+                return DiffWatchTick::LocalPrUnchanged(interval);
+            }
+            let tip = self
+                .forge_backend
+                .as_deref()
+                .and_then(|backend| backend.local_checkout_path())
+                .and_then(|checkout| git2::Repository::open(checkout).ok())
+                .and_then(|git| {
+                    git.find_reference(&format!("refs/heads/{}", pr.head_ref_name))
+                        .ok()
+                        .and_then(|reference| reference.target())
+                });
+            return if tip.is_some_and(|tip| Some(tip.to_string()) != self.current_pr_head) {
+                DiffWatchTick::FollowLocalPr(interval)
+            } else {
+                DiffWatchTick::LocalPrUnchanged(interval)
+            };
+        }
         let Some(interval) = self.diff_watch_interval else {
             return DiffWatchTick::Idle;
         };
@@ -1042,10 +1091,7 @@ impl App {
         // both back onto `FileBackend`, which the worker cannot reopen: it
         // resolves a backend via `detect_vcs`, which only ever discovers a
         // real git/jj/hg repository at the process cwd.
-        if matches!(self.diff_source, DiffSource::PullRequest(_))
-            || self.is_pristine_mode
-            || self.vcs_info.vcs_type == VcsType::File
-        {
+        if self.is_pristine_mode || self.vcs_info.vcs_type == VcsType::File {
             return DiffWatchTick::Idle;
         }
         if now < self.next_diff_watch_at {
@@ -1552,6 +1598,8 @@ pub(in crate::app) enum DiffWatchTick {
     Defer(Duration),
     /// Due and clear. Move the deadline and start a worker.
     Fetch(Duration),
+    FollowLocalPr(Duration),
+    LocalPrUnchanged(Duration),
 }
 
 /// True when a landed diff-watch result should be discarded rather than

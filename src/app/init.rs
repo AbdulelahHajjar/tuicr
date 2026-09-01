@@ -487,6 +487,8 @@ impl App {
                 + Duration::from_millis(DEFAULT_REVIEW_WATCH_INTERVAL_MS),
             diff_watch_interval: None,
             next_diff_watch_at: Instant::now(),
+            local_pr_follow_interval: Some(Duration::from_millis(1000)),
+            next_local_pr_follow_at: Instant::now() + Duration::from_millis(1000),
             last_diff_watch_error: None,
             diff_watch_reload: None,
             vcs_open_options: VcsOpenOptions::default(),
@@ -857,6 +859,7 @@ impl App {
         // the Azure parser last.
         let target = invocation.target.as_deref();
         let parsed_remote = target.and_then(parse_forge_pr_target);
+        validate_pr_base_target(parsed_remote.is_some(), invocation.base.as_deref())?;
 
         // Resolution order when the target lacks an explicit repo
         // (`tuicr pr 125`):
@@ -1005,9 +1008,18 @@ impl App {
     }
 }
 
+fn validate_pr_base_target(is_forge_target: bool, base: Option<&str>) -> Result<()> {
+    if is_forge_target && base.is_some() {
+        return Err(TuicrError::Forge(
+            "--base cannot be used with a forge pull request target".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod pr_target_tests {
-    use super::parse_forge_pr_target;
+    use super::{parse_forge_pr_target, validate_pr_base_target};
 
     #[test]
     fn should_classify_numeric_target_as_existing_forge_pr() {
@@ -1020,5 +1032,15 @@ mod pr_target_tests {
     #[test]
     fn should_leave_branch_name_for_local_target_resolution() {
         assert!(parse_forge_pr_target("feature/local-forge").is_none());
+    }
+
+    #[test]
+    fn should_reject_base_with_forge_target() {
+        let error = validate_pr_base_target(true, Some("main")).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "--base cannot be used with a forge pull request target"
+        );
     }
 }

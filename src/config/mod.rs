@@ -158,6 +158,9 @@ pub struct AppConfig {
     /// Disabled by default, and `0` disables it too. Ignored for
     /// pull-request reviews and `--all-files` mode.
     pub diff_watch_interval_ms: Option<usize>,
+    /// How often local pull requests check whether their head branch moved.
+    /// Defaults to 1000; `0` disables it.
+    pub local_pr_follow_interval_ms: Option<usize>,
     pub no_update_check: Option<bool>,
     /// Render single-file and pristine views in full-width mode by default.
     /// Pristine `--all-files` mode already defaults to true regardless of
@@ -224,6 +227,7 @@ const KNOWN_KEYS: &[&str] = &[
     "scroll_offset",
     "review_watch_interval_ms",
     "diff_watch_interval_ms",
+    "local_pr_follow_interval_ms",
     "no_update_check",
     "single_file_view",
     "username",
@@ -468,6 +472,11 @@ fn load_config_from_path(path: &Path) -> Result<ConfigLoadOutcome> {
         scroll_offset: read_usize(table, "scroll_offset", &mut warnings),
         review_watch_interval_ms: read_usize(table, "review_watch_interval_ms", &mut warnings),
         diff_watch_interval_ms: read_usize(table, "diff_watch_interval_ms", &mut warnings),
+        local_pr_follow_interval_ms: read_usize(
+            table,
+            "local_pr_follow_interval_ms",
+            &mut warnings,
+        ),
         no_update_check: read_bool(table, "no_update_check", &mut warnings),
         single_file_view: read_bool(table, "single_file_view", &mut warnings),
         username: read_string(table, "username", &mut warnings),
@@ -1352,6 +1361,19 @@ mod tests {
             outcome.warnings[0],
             "Warning: Config key 'diff_watch_interval_ms' must be a non-negative integer; ignoring value"
         );
+    }
+
+    #[test]
+    fn should_parse_local_pr_follow_interval_ms() {
+        let outcome = parse_config("local_pr_follow_interval_ms = 250\n");
+        assert_eq!(
+            outcome
+                .config
+                .as_ref()
+                .and_then(|cfg| cfg.local_pr_follow_interval_ms),
+            Some(250)
+        );
+        assert!(outcome.warnings.is_empty());
     }
 
     // mouse

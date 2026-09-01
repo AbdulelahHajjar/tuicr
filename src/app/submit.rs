@@ -289,8 +289,10 @@ impl App {
         }
         let diff_start_sha = self
             .pr_range_sha_pair()
-            .map(|(start_sha, _)| start_sha)
-            .unwrap_or_else(|| pr.base_sha.clone());
+            .filter(|_| {
+                Self::is_strict_commit_selection(self.commit_selection_range, self.pr_commits.len())
+            })
+            .map(|(start_sha, _)| start_sha);
 
         let Some(state) = self.submit_state.take() else {
             return Ok(());
@@ -376,22 +378,18 @@ impl App {
             );
             let result = match backend {
                 Ok(backend) => match backend.get_pull_request(target) {
-                    Ok(mut details) => {
-                        if details.repository.kind == crate::forge::traits::ForgeKind::Local {
-                            details.diff_start_sha = Some(diff_start_sha);
-                        }
-                        backend
-                            .create_review(
-                                &details,
-                                CreateReviewRequest {
-                                    event,
-                                    commit_id: &commit_id,
-                                    body: &body,
-                                    comments: &mappable,
-                                },
-                            )
-                            .map_err(|e| e.to_string())
-                    }
+                    Ok(details) => backend
+                        .create_review(
+                            &details,
+                            CreateReviewRequest {
+                                event,
+                                commit_id: &commit_id,
+                                diff_start_sha: diff_start_sha.as_deref(),
+                                body: &body,
+                                comments: &mappable,
+                            },
+                        )
+                        .map_err(|e| e.to_string()),
                     Err(e) => Err(e.to_string()),
                 },
                 Err(error) => Err(error.to_string()),

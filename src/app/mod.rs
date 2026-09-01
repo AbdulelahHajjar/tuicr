@@ -1117,6 +1117,8 @@ pub struct App {
     /// also means disabled.
     pub diff_watch_interval: Option<Duration>,
     pub next_diff_watch_at: Instant,
+    pub local_pr_follow_interval: Option<Duration>,
+    pub next_local_pr_follow_at: Instant,
     /// Last diff-watch error text, so a sustained failure warns once instead of
     /// once per tick. Cleared on the next successful fetch.
     last_diff_watch_error: Option<String>,

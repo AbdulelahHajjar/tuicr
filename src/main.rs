@@ -371,6 +371,9 @@ fn main() -> anyhow::Result<()> {
         if let Some(interval_ms) = cfg.diff_watch_interval_ms {
             app.set_diff_watch_interval_ms(interval_ms as u64);
         }
+        if let Some(interval_ms) = cfg.local_pr_follow_interval_ms {
+            app.set_local_pr_follow_interval_ms(interval_ms as u64);
+        }
     }
 
     // On narrow terminals, start with only the diff panel visible.

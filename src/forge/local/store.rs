@@ -203,34 +203,45 @@ impl LocalForgeStore {
         with_directory_lock(&self.root, LOCK_FILENAME, || {
             let mut reviews = self.load_reviews(number)?;
             let mut threads = self.load_threads(number)?;
-            let id = reviews
-                .reviews
-                .iter()
-                .map(|review| review.id)
-                .max()
-                .unwrap_or(0)
-                + 1;
             let submitted_at = Utc::now();
-            let review = LocalReview {
-                id,
-                event: event.to_string(),
-                body: body.to_string(),
-                commit_id: commit_id.to_string(),
-                author: author.to_string(),
-                submitted_at,
-            };
-            if event != "PENDING" {
-                for pending in &mut reviews.reviews {
-                    if pending.event == "PENDING" && pending.author == author {
-                        pending.event = event.to_string();
-                        pending.submitted_at = submitted_at;
-                    }
+            let pending = (event != "PENDING")
+                .then(|| {
+                    reviews
+                        .reviews
+                        .iter_mut()
+                        .find(|review| review.event == "PENDING" && review.author == author)
+                })
+                .flatten();
+            let review = if let Some(pending) = pending {
+                pending.event = event.to_string();
+                if !body.is_empty() {
+                    pending.body = body.to_string();
                 }
-            }
+                pending.commit_id = commit_id.to_string();
+                pending.submitted_at = submitted_at;
+                pending.clone()
+            } else {
+                let id = reviews
+                    .reviews
+                    .iter()
+                    .map(|review| review.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let review = LocalReview {
+                    id,
+                    event: event.to_string(),
+                    body: body.to_string(),
+                    commit_id: commit_id.to_string(),
+                    author: author.to_string(),
+                    submitted_at,
+                };
+                reviews.reviews.push(review.clone());
+                review
+            };
             for thread in &mut new_threads {
-                thread.review_id = id;
+                thread.review_id = review.id;
             }
-            reviews.reviews.push(review.clone());
             threads.threads.extend(new_threads);
             self.save_json(&self.reviews_path(number), &reviews)?;
             self.save_json(&self.threads_path(number), &threads)?;
@@ -370,5 +381,53 @@ mod tests {
             store_directory_name(&ForgeRepository::local("org/team", "project")),
             "org-team__project"
         );
+    }
+
+    #[test]
+    fn should_submit_pending_review_in_place() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store.open_pull("feature", "main", "aaaa", false).unwrap();
+        let draft = store
+            .add_review(1, "PENDING", "draft", "aaaa", "author", Vec::new())
+            .unwrap();
+        let thread = LocalThread {
+            id: "thread".to_string(),
+            path: "src/lib.rs".to_string(),
+            side: "RIGHT".to_string(),
+            original_line: 1,
+            original_commit: "aaaa".to_string(),
+            base_commit: "base".to_string(),
+            line_text: "line".to_string(),
+            created_at: Utc::now(),
+            is_resolved: false,
+            resolved_at: None,
+            review_id: 0,
+            comments: Vec::new(),
+        };
+        let submitted = store
+            .add_review(1, "COMMENT", "final", "bbbb", "author", vec![thread])
+            .unwrap();
+
+        let reviews = store.reviews(1).unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].event, "COMMENT");
+        assert_eq!(reviews[0].body, "final");
+        assert_eq!(submitted.id, draft.id);
+        assert_eq!(store.threads(1).unwrap()[0].review_id, draft.id);
+    }
+
+    #[test]
+    fn should_reject_unknown_store_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        fs::create_dir_all(store.root()).unwrap();
+        fs::write(
+            store.root().join("pulls.json"),
+            r#"{"version":2,"next_number":1,"pulls":[]}"#,
+        )
+        .unwrap();
+
+        assert!(store.find_pull_by_head("feature").is_err());
     }
 }

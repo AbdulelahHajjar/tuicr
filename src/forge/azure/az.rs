@@ -1132,6 +1132,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: "head111",
+            diff_start_sha: None,
             body: "",
             comments: &[inline(10, GhSide::Right)],
         };
@@ -1160,6 +1161,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: "head111",
+            diff_start_sha: None,
             body: "",
             comments: &[inline(4, GhSide::Left)],
         };
@@ -1182,6 +1184,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Approve,
             commit_id: "head111",
+            diff_start_sha: None,
             body: "",
             comments: &[],
         };

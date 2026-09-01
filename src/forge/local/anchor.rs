@@ -21,13 +21,17 @@ pub(crate) fn reanchor(
     current_head: &str,
     files: &[DiffFile],
 ) -> (Option<u32>, bool) {
-    if thread.original_commit == current_head {
+    let side = RemoteCommentSide::parse(&thread.side);
+    if thread.original_commit == current_head
+        && (thread.line_text.is_empty()
+            || line_text(files, Path::new(&thread.path), side, thread.original_line).as_deref()
+                == Some(thread.line_text.as_str()))
+    {
         return (Some(thread.original_line), false);
     }
     if thread.line_text.is_empty() {
         return (None, true);
     }
-    let side = RemoteCommentSide::parse(&thread.side);
     let nearest = matching_lines(files, Path::new(&thread.path), side)
         .filter(|(_, content)| *content == thread.line_text)
         .map(|(line, _)| line)
@@ -68,7 +72,7 @@ mod tests {
 
     use super::*;
 
-    fn file(lines: &[(u32, &str)]) -> DiffFile {
+    fn file(lines: &[(u32, u32, &str)]) -> DiffFile {
         DiffFile {
             old_path: Some(PathBuf::from("src/lib.rs")),
             new_path: Some(PathBuf::from("src/lib.rs")),
@@ -77,11 +81,11 @@ mod tests {
                 header: "@@".to_string(),
                 lines: lines
                     .iter()
-                    .map(|(number, content)| DiffLine {
+                    .map(|(old, new, content)| DiffLine {
                         origin: LineOrigin::Context,
                         content: (*content).to_string(),
-                        old_lineno: Some(*number),
-                        new_lineno: Some(*number),
+                        old_lineno: Some(*old),
+                        new_lineno: Some(*new),
                         highlighted_spans: None,
                     })
                     .collect(),
@@ -116,15 +120,16 @@ mod tests {
 
     #[test]
     fn should_keep_original_line_at_same_head() {
+        let files = vec![file(&[(17, 17, "same")])];
         assert_eq!(
-            reanchor(&thread("head", 17, "same"), "head", &[]),
+            reanchor(&thread("head", 17, "same"), "head", &files),
             (Some(17), false)
         );
     }
 
     #[test]
     fn should_pick_nearest_duplicate_when_line_moves() {
-        let files = vec![file(&[(3, "same"), (20, "same")])];
+        let files = vec![file(&[(3, 3, "same"), (20, 20, "same")])];
         assert_eq!(
             reanchor(&thread("old", 17, "same"), "new", &files),
             (Some(20), false)
@@ -133,10 +138,27 @@ mod tests {
 
     #[test]
     fn should_mark_deleted_line_outdated() {
-        let files = vec![file(&[(3, "other")])];
+        let files = vec![file(&[(3, 3, "other")])];
         assert_eq!(
             reanchor(&thread("old", 17, "gone"), "new", &files),
             (None, true)
+        );
+    }
+
+    #[test]
+    fn should_reanchor_left_line_by_content_at_same_head() {
+        let files = vec![file(&[(2, 3, "b")])];
+        let mut comment = thread("head", 3, "b");
+        comment.side = "LEFT".to_string();
+
+        assert_eq!(reanchor(&comment, "head", &files), (Some(2), false));
+    }
+
+    #[test]
+    fn should_keep_empty_text_fast_path_at_same_head() {
+        assert_eq!(
+            reanchor(&thread("head", 17, ""), "head", &[]),
+            (Some(17), false)
         );
     }
 }

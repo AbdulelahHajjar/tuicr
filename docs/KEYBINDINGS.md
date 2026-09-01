@@ -196,6 +196,8 @@ In command mode,
 | `:edit` | Open focused file in `$EDITOR` |
 | `:clip` (`:export`) | Copy review to clipboard |
 | `:copy-url` | Copy the open PR URL to clipboard (PR mode) |
+| `:resolve` | Resolve the review thread at the cursor (Local pull requests) |
+| `:unresolve` | Reopen the review thread at the cursor (Local pull requests) |
 | `:summary` | Show all pending local-draft comments; `j`/`k` select and `Enter` jumps |
 | `:diff` | Toggle diff view (unified / side-by-side) |
 | `:focus` (`:f`) | Toggle single-file view |
@@ -260,6 +262,10 @@ Gitea requires a review summary for `request-changes` and `draft`, and for `comm
 are no inline comments; inline comments alone do not satisfy it. GitLab `draft` creates draft
 notes that the author publishes from GitLab's own "Submit review" UI. Gerrit `draft` stores draft
 comments that the author publishes from Gerrit's Reply UI.
+
+`:resolve` and `:unresolve` target a selected remote thread in the comment navigator, a remote
+thread row under the diff cursor, or the first thread anchored to the diff line under the cursor.
+Thread resolution is available only for Local pull requests.
 
 ## Commit selection / review target selector
 

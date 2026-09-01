@@ -2525,11 +2525,15 @@ use crate::forge::remote_comments::{
     PrCommentsVisibility, RemoteCommentSide, RemoteReviewComment, RemoteReviewThread,
 };
 
+type ResolveCalls = std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>;
+
 struct ThreadAwareForgeBackend {
     details: crate::forge::traits::PullRequestDetails,
     patch: String,
     threads: Vec<RemoteReviewThread>,
     calls: std::cell::Cell<u32>,
+    resolve_calls: ResolveCalls,
+    supports_resolve: bool,
 }
 
 impl ThreadAwareForgeBackend {
@@ -2543,7 +2547,28 @@ impl ThreadAwareForgeBackend {
             patch,
             threads,
             calls: std::cell::Cell::new(0),
+            resolve_calls: Default::default(),
+            supports_resolve: false,
         }
+    }
+
+    fn resolving(
+        details: crate::forge::traits::PullRequestDetails,
+        patch: String,
+        threads: Vec<RemoteReviewThread>,
+    ) -> (Self, ResolveCalls) {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        (
+            Self {
+                details,
+                patch,
+                threads,
+                calls: std::cell::Cell::new(0),
+                resolve_calls: calls.clone(),
+                supports_resolve: true,
+            },
+            calls,
+        )
     }
 }
 
@@ -2599,6 +2624,24 @@ impl crate::forge::traits::ForgeBackend for ThreadAwareForgeBackend {
         _request: crate::forge::traits::CreateReviewRequest<'_>,
     ) -> Result<crate::forge::traits::GhCreateReviewResponse> {
         unimplemented!()
+    }
+
+    fn resolve_thread(
+        &self,
+        pr: &crate::forge::traits::PullRequestDetails,
+        thread_id: &str,
+        resolved: bool,
+    ) -> Result<()> {
+        if !self.supports_resolve {
+            return Err(TuicrError::UnsupportedOperation(format!(
+                "Resolving review threads is not supported on {}",
+                pr.repository.kind.display_name()
+            )));
+        }
+        self.resolve_calls
+            .borrow_mut()
+            .push((thread_id.to_string(), resolved));
+        Ok(())
     }
 }
 
@@ -2717,6 +2760,109 @@ fn should_warn_when_comments_command_used_outside_pr_mode() {
         msg.content.contains("PR mode"),
         "got message: {}",
         msg.content
+    );
+}
+
+fn resolving_thread_app() -> (App, ResolveCalls) {
+    let mut app = build_app();
+    let summary = sample_pr(42, "answer");
+    let (backend, calls) = ThreadAwareForgeBackend::resolving(
+        test_pr_details(42, "answer"),
+        crate::forge::github::gh::tests_fixture::SIMPLE_PATCH.to_string(),
+        vec![sample_thread(2, "remote", false, false)],
+    );
+    app.open_pr_with_backend(&summary, Box::new(backend), None)
+        .unwrap();
+    (app, calls)
+}
+
+#[test]
+fn should_resolve_thread_selected_in_comment_navigator() {
+    let (mut app, calls) = resolving_thread_app();
+    app.focused_panel = FocusedPanel::Comments;
+    app.comment_navigator_state.select(0);
+
+    app.resolve_review_thread_at_cursor(true).unwrap();
+
+    assert_eq!(&*calls.borrow(), &[("T".to_string(), true)]);
+    assert!(app.forge_review_threads[0].is_resolved);
+    assert!(app.build_comment_navigator_items().is_empty());
+}
+
+#[test]
+fn should_reopen_remote_thread_line_under_diff_cursor() {
+    let (mut app, calls) = resolving_thread_app();
+    app.session.remote_comments_visibility = PrCommentsVisibility::All;
+    app.rebuild_annotations();
+    app.focused_panel = FocusedPanel::Diff;
+    app.diff_state.cursor_line = app
+        .line_annotations
+        .iter()
+        .position(|line| matches!(line, AnnotatedLine::RemoteThreadLine { .. }))
+        .unwrap();
+
+    app.resolve_review_thread_at_cursor(false).unwrap();
+
+    assert_eq!(&*calls.borrow(), &[("T".to_string(), false)]);
+    assert_eq!(app.message.as_ref().unwrap().content, "Thread reopened");
+}
+
+#[test]
+fn should_resolve_first_thread_anchored_at_diff_line() {
+    let (mut app, calls) = resolving_thread_app();
+    app.focused_panel = FocusedPanel::Diff;
+    app.diff_state.cursor_line = app
+        .line_annotations
+        .iter()
+        .position(|line| {
+            matches!(
+                line,
+                AnnotatedLine::DiffLine {
+                    new_lineno: Some(2),
+                    ..
+                }
+            )
+        })
+        .unwrap();
+
+    app.resolve_review_thread_at_cursor(true).unwrap();
+
+    assert_eq!(&*calls.borrow(), &[("T".to_string(), true)]);
+}
+
+#[test]
+fn should_error_when_no_review_thread_is_at_cursor() {
+    let (mut app, _calls) = resolving_thread_app();
+    app.focused_panel = FocusedPanel::Diff;
+    app.diff_state.cursor_line = 0;
+
+    let error = app.resolve_review_thread_at_cursor(true).unwrap_err();
+
+    assert_eq!(error.to_string(), "No review thread at cursor");
+}
+
+#[test]
+fn should_preserve_unsupported_forge_resolution_error() {
+    use crate::handler::handle_command_action;
+    use crate::input::Action;
+
+    let mut app = build_app();
+    let summary = sample_pr(42, "answer");
+    let backend = Box::new(ThreadAwareForgeBackend::new(
+        test_pr_details(42, "answer"),
+        crate::forge::github::gh::tests_fixture::SIMPLE_PATCH.to_string(),
+        vec![sample_thread(2, "remote", false, false)],
+    ));
+    app.open_pr_with_backend(&summary, backend, None).unwrap();
+    app.focused_panel = FocusedPanel::Comments;
+    app.input_mode = InputMode::Command;
+    app.command_buffer = "resolve".to_string();
+
+    handle_command_action(&mut app, Action::SubmitInput);
+
+    assert_eq!(
+        app.message.as_ref().unwrap().content,
+        "Resolving review threads is not supported on GitHub"
     );
 }
 

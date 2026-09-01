@@ -458,6 +458,8 @@ pub struct GhCreateReviewResponse {
 pub struct CreateReviewRequest<'a> {
     pub event: SubmitEvent,
     pub commit_id: &'a str,
+    /// Parent SHA of the displayed diff, or `None` for the full pull request.
+    pub diff_start_sha: Option<&'a str>,
     pub body: &'a str,
     pub comments: &'a [crate::forge::submit::InlineComment],
 }

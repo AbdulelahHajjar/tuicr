@@ -1549,6 +1549,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1611,6 +1612,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1668,6 +1670,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1729,6 +1732,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1772,6 +1776,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1809,6 +1814,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1853,6 +1859,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Approve,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -1899,6 +1906,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::RequestChanges,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "overall please address the comments",
             comments: &[inline],
         };
@@ -1975,6 +1983,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::RequestChanges,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "",
             comments: &[inline],
         };
@@ -2040,6 +2049,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Draft,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "overall draft",
             comments: &[inline],
         };
@@ -2121,6 +2131,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Draft,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "overall draft",
             comments: &[inline],
         };
@@ -2163,6 +2174,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: crate::forge::submit::SubmitEvent::Comment,
             commit_id: "headsha1",
+            diff_start_sha: None,
             body: "overall comment",
             comments: &[inline],
         };

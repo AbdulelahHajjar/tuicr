@@ -1361,6 +1361,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "overall looks fine",
             comments: &comments,
         };
@@ -1389,6 +1390,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "",
             comments: &comments,
         };
@@ -1406,6 +1408,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "",
             comments: &comments,
         };
@@ -1426,6 +1429,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "",
             comments: &comments,
         };
@@ -1446,6 +1450,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "",
             comments: &comments,
         };
@@ -1465,6 +1470,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Approve,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "",
             comments: &comments,
         };
@@ -1496,6 +1502,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "hello",
             comments: &[],
         };
@@ -1517,6 +1524,7 @@ mod tests {
             let request = CreateReviewRequest {
                 event,
                 commit_id: &"a".repeat(40),
+                diff_start_sha: None,
                 body: "text",
                 comments: &[],
             };
@@ -1563,6 +1571,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Comment,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "text",
             comments: &[],
         };
@@ -1594,6 +1603,7 @@ mod tests {
         let request = CreateReviewRequest {
             event: SubmitEvent::Approve,
             commit_id: &"a".repeat(40),
+            diff_start_sha: None,
             body: "text",
             comments: &[],
         };

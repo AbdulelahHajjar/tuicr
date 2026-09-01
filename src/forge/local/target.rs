@@ -43,10 +43,16 @@ pub(crate) fn resolve_local_target(
     let existing = store.find_pull_by_head(&head_ref)?;
     let base_ref = match base_override {
         Some(base) => {
-            resolve_ref_oid(&git, base).map_err(|_| {
+            let (_, reference) = git.revparse_ext(base).map_err(|_| {
                 TuicrError::Forge(format!("Local base ref `{base}` does not exist"))
             })?;
-            base.to_string()
+            reference
+                .and_then(|reference| reference.shorthand().map(str::to_string))
+                .ok_or_else(|| {
+                    TuicrError::Forge(format!(
+                        "Local base `{base}` must name a branch or other reference"
+                    ))
+                })?
         }
         None => existing
             .as_ref()
@@ -80,6 +86,8 @@ pub(crate) fn local_repository(checkout: &Path) -> Result<ForgeRepository> {
     ))
 }
 
+/// Resolves `origin/HEAD` to its local branch when available, otherwise to
+/// the corresponding `origin/<name>` remote-tracking reference.
 pub(crate) fn resolve_default_base(repository: &Repository) -> Result<String> {
     if let Ok(origin_head) = repository.find_reference("refs/remotes/origin/HEAD")
         && let Some(target) = origin_head.symbolic_target()
@@ -272,6 +280,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(pull.base_ref, "main");
+    }
+
+    #[test]
+    fn should_reject_moving_revision_as_base() {
+        let (temp, _git, _base, _feature, _guard) = repository_with_branches();
+
+        let error =
+            resolve_local_target(&temp.path().join("repo"), Some("feature"), Some("HEAD~1"))
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must name a branch or other reference")
+        );
     }
 
     #[test]

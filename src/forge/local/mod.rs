@@ -385,7 +385,7 @@ impl ForgeBackend for LocalForgeBackend {
         }
         let range = format!(
             "{}..{}",
-            pr.diff_start_sha.as_deref().unwrap_or(&pr.base_sha),
+            request.diff_start_sha.unwrap_or(&pr.base_sha),
             request.commit_id
         );
         let files = self.parsed_diff(run_git_diff(&self.checkout, &[&range])?)?;
@@ -655,6 +655,92 @@ mod tests {
     }
 
     #[test]
+    fn should_list_newest_first_and_exclude_zero_ahead_branches() {
+        let fixture = Fixture::new();
+        let git = Repository::open(&fixture.checkout).unwrap();
+        git.reference("refs/heads/newer", fixture.base, true, "test")
+            .unwrap();
+        commit(&git, "newer", "newer\n", "newer", 10);
+
+        let page = fixture
+            .backend
+            .list_pull_requests(PullRequestListQuery {
+                repository: fixture.backend.repository.clone(),
+                already_loaded: 0,
+                page_size: 10,
+                scope: PullRequestListScope::Open,
+            })
+            .unwrap();
+
+        assert_eq!(
+            page.pull_requests
+                .iter()
+                .map(|pull| pull.head_ref_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["newer", "feature"]
+        );
+        assert!(
+            !page
+                .pull_requests
+                .iter()
+                .any(|pull| pull.head_ref_name == "develop")
+        );
+    }
+
+    #[test]
+    fn should_report_review_decision_and_latest_review_per_author() {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .add_review(
+                fixture.pull_number,
+                "COMMENT",
+                "first",
+                &fixture.first.to_string(),
+                "alice",
+                Vec::new(),
+            )
+            .unwrap();
+        fixture
+            .store
+            .add_review(
+                fixture.pull_number,
+                "APPROVE",
+                "approved",
+                &fixture.second.to_string(),
+                "bob",
+                Vec::new(),
+            )
+            .unwrap();
+        fixture
+            .store
+            .add_review(
+                fixture.pull_number,
+                "REQUEST_CHANGES",
+                "latest",
+                &fixture.second.to_string(),
+                "alice",
+                Vec::new(),
+            )
+            .unwrap();
+
+        let info = fixture
+            .backend
+            .get_pull_request_info(PullRequestTarget::with_repository(
+                fixture.backend.repository.clone(),
+                fixture.pull_number,
+                fixture.pull_number.to_string(),
+            ))
+            .unwrap();
+
+        assert_eq!(info.review_decision.as_deref(), Some("CHANGES_REQUESTED"));
+        assert_eq!(info.latest_reviews.len(), 2);
+        assert_eq!(info.latest_reviews[0].author.as_deref(), Some("bob"));
+        assert_eq!(info.latest_reviews[1].author.as_deref(), Some("alice"));
+        assert_eq!(info.latest_reviews[1].state, "CHANGES_REQUESTED");
+    }
+
+    #[test]
     fn should_keep_session_key_at_same_head_and_change_it_after_commit() {
         let fixture = Fixture::new();
         let first_open = fixture.details();
@@ -703,6 +789,39 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_review_on_closed_pull() {
+        let fixture = Fixture::new();
+        let git = Repository::open(&fixture.checkout).unwrap();
+        git.set_head("refs/heads/develop").unwrap();
+        git.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        git.find_branch("feature", git2::BranchType::Local)
+            .unwrap()
+            .delete()
+            .unwrap();
+        let details = fixture.details();
+
+        let error = fixture
+            .backend
+            .create_review(
+                &details,
+                CreateReviewRequest {
+                    event: SubmitEvent::Comment,
+                    commit_id: &details.head_sha,
+                    diff_start_sha: None,
+                    body: "",
+                    comments: &[],
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Cannot review a closed local pull request"
+        );
+    }
+
+    #[test]
     fn should_create_all_review_events_promote_pending_and_persist_thread_text() {
         let fixture = Fixture::new();
         let details = fixture.details();
@@ -715,6 +834,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::Draft,
                     commit_id: &details.head_sha,
+                    diff_start_sha: None,
                     body: "draft body",
                     comments: std::slice::from_ref(&comment),
                 },
@@ -727,6 +847,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: &details.head_sha,
+                    diff_start_sha: None,
                     body: "comment body",
                     comments: &[],
                 },
@@ -739,6 +860,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::Approve,
                     commit_id: &details.head_sha,
+                    diff_start_sha: None,
                     body: "approved",
                     comments: &[],
                 },
@@ -751,6 +873,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::RequestChanges,
                     commit_id: &details.head_sha,
+                    diff_start_sha: None,
                     body: "changes",
                     comments: &[],
                 },
@@ -772,7 +895,7 @@ mod tests {
             .list_pull_request_review_metadata(&details)
             .unwrap();
         assert_eq!(metadata.viewer_login.as_deref(), Some("Test User"));
-        assert_eq!(metadata.reviews.len(), 4);
+        assert_eq!(metadata.reviews.len(), 3);
 
         let thread_id = stored_threads[0].id.clone();
         fixture
@@ -790,8 +913,8 @@ mod tests {
         let fixture = Fixture::new();
         let git = Repository::open(&fixture.checkout).unwrap();
         let third = commit(&git, "feature", "alpha\nbeta final\ngamma\n", "third", 4);
-        let mut details = fixture.details();
-        details.diff_start_sha = Some(fixture.second.to_string());
+        let details = fixture.details();
+        let diff_start_sha = fixture.second.to_string();
         let comment = InlineComment {
             path: PathBuf::from("file.txt"),
             line: 2,
@@ -812,6 +935,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: &third.to_string(),
+                    diff_start_sha: Some(&diff_start_sha),
                     body: "",
                     comments: &[comment],
                 },
