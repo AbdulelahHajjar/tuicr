@@ -669,6 +669,30 @@ pub fn load_pr_session(key: &PrSessionKey) -> Result<Option<(PathBuf, ReviewSess
     }
 }
 
+/// Load the manifest's current PR session for `slug`, regardless of head SHA.
+pub(crate) fn load_latest_pr_session(slug: &str) -> Result<Option<(PathBuf, ReviewSession)>> {
+    let reviews_dir = get_reviews_dir()?;
+    maybe_migrate(&reviews_dir)?;
+
+    let manifest = manifest::load_manifest(&reviews_dir).unwrap_or_default();
+    let Some(entry) = manifest.get_pr(slug) else {
+        return Ok(None);
+    };
+    let ManifestKind::Pr { number, head_sha } = &entry.kind else {
+        return Ok(None);
+    };
+    let full_path = reviews_dir.join(&entry.path);
+    let session = load_session(&full_path)?;
+    let Some(key) = session.pr_session_key.as_ref() else {
+        return Ok(None);
+    };
+    if key.number != *number || key.head_sha != *head_sha || Slug::from(key).to_string() != slug {
+        return Ok(None);
+    }
+
+    Ok(Some((full_path, session)))
+}
+
 /// Derive the slug for a session from its embedded fields. Local sessions
 /// require resolving the repo's `origin` remote (I/O); PR sessions are
 /// derived purely from the embedded `pr_session_key`.

@@ -593,10 +593,21 @@ impl App {
     pub(in crate::app) fn opened_pr_with_persisted_session(
         opened: crate::forge::pr_open::OpenedPullRequest,
     ) -> Result<crate::forge::pr_open::OpenedPullRequest> {
-        match Self::load_pr_session_for_opened(&opened)? {
-            Some(session) => Ok(crate::forge::pr_open::OpenedPullRequest { session, ..opened }),
-            None => Ok(opened),
-        }
+        let session = match Self::load_pr_session_for_opened(&opened)? {
+            Some(session) => session,
+            None => {
+                let slug = crate::slug::Slug::from(&opened.key).to_string();
+                match crate::persistence::storage::load_latest_pr_session(&slug)? {
+                    Some((_path, previous)) => Self::reviewed_state_carried_forward(
+                        &previous,
+                        opened.session.clone(),
+                        &opened.diff_files,
+                    ),
+                    None => return Ok(opened),
+                }
+            }
+        };
+        Ok(crate::forge::pr_open::OpenedPullRequest { session, ..opened })
     }
 
     pub(in crate::app) fn opened_pr_with_new_head_session(

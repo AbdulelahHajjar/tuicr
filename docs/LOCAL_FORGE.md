@@ -206,7 +206,7 @@ current tip of `head_ref` in the checkout with `current_pr_head`; if it moved
 and no PR reload is in flight, call `spawn_pr_reload()`. Everything after
 that is the existing reload path (`finish_pr_reload` → head changed →
 `opened_pr_with_new_head_session` → "Reloaded PR at new head"). `:e` keeps
-working as well.
+working as well, and a fresh launch carries state from the previous head.
 
 New config key `local_pr_follow_interval_ms` (default `1000`; `0` disables).
 `diff_watch_interval_ms` keeps its current meaning and stays ignored for

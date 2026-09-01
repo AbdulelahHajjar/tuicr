@@ -185,7 +185,44 @@ def main():
         tui.keys(":resolve\r", 1.5)
         threads = load_threads(threads_path)
         check(bool(threads) and threads[0]["is_resolved"] is True, ":resolve persisted is_resolved")
-        tui.keys(":w\r", 1.0)
+        # leave an unsubmitted draft, save, quit; commit; relaunch -> the draft must carry to the new head
+        tui.keys("gg", 0.5)
+        tui.keys("}", 0.5)
+        tui.keys("]", 0.5)
+        tui.keys("j", 0.3)
+        tui.keys("c", 0.8)
+        tui.keys("second draft", 0.3)
+        tui.keys("\x13", 1.0)
+        tui.keys(":w\r", 1.5)
+        sessions_dir = os.path.join(home, "Library", "Application Support", "tuicr", "reviews", "sessions")
+        head_now = sh(repo, "git", "rev-parse", "HEAD")
+        saved = any(
+            "second draft" in [c["content"] for review in data["files"].values() for comments in review["line_comments"].values() for c in comments]
+            for data in (json.load(open(os.path.join(sessions_dir, name))) for name in os.listdir(sessions_dir))
+            if (data.get("pr_session_key") or {}).get("head_sha") == head_now
+        )
+        check(saved, "unsubmitted draft saved in the current-head session before quitting")
+        tui.keys(":q\r", 1.5)
+        tui.stop()
+
+        print("== relaunch after a new commit (startup carry-forward)")
+        with open(os.path.join(repo, "README.md"), "a") as handle:
+            handle.write("third\n")
+        sh(repo, "git", "commit", "-q", "-am", "docs: third")
+        head_third = sh(repo, "git", "rev-parse", "HEAD")
+        tui = Tui(options.tuicr, repo, env, ["pr", "--no-update-check"])
+        tui.pump(6)
+        tui.keys(":w\r", 1.5)
+        carried = False
+        for path in os.listdir(sessions_dir):
+            data = json.load(open(os.path.join(sessions_dir, path)))
+            key = data.get("pr_session_key") or {}
+            if key.get("head_sha") != head_third:
+                continue
+            bodies = [c["content"] for review in data["files"].values() for comments in review["line_comments"].values() for c in comments]
+            carried = "second draft" in bodies
+        check(carried, "relaunch at the new head carried the unsubmitted draft")
+        tui.keys(":q!\r", 1.0)
         tui.stop()
 
         print("== tuicr review list")

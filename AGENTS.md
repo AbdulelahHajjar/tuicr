@@ -283,7 +283,7 @@ In-flight requests carry an identity tuple (repo, PR#, head SHA). A late result 
 
 ### Session key + lifecycle
 
-`PrSessionKey { repository, number, head_sha }` identifies a PR review session. Same PR + same head = same session = drafts reattach. New commit on the PR = new key = new session.
+`PrSessionKey { repository, number, head_sha }` identifies a PR review session. Same PR + same head = same session = drafts reattach. New commit on the PR = new key = new session. When a fresh process opens a new head, it carries eligible drafts and reviewed state forward from the manifest's previous session for the same PR slug.
 
 Each `Comment` carries a `lifecycle` field:
 

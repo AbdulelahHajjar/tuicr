@@ -1127,7 +1127,7 @@ fn should_switch_session_when_pr_head_advances_on_reload() {
 }
 
 #[test]
-fn should_load_persisted_pr_session_when_reopening_same_head() {
+fn should_reattach_same_head_pr_session_without_duplicating_comments() {
     // given a saved PR session for the same PR head
     let _reviews = TestReviewsDir::new();
     let mut app = build_app();
@@ -1149,6 +1149,7 @@ fn should_load_persisted_pr_session_when_reopening_same_head() {
             CommentType::from_id("note"),
             None,
         ));
+    let persisted_session_id = app.session.id.clone();
     crate::persistence::save_session(&app.session).unwrap();
 
     // when the same PR head is opened again
@@ -1162,10 +1163,122 @@ fn should_load_persisted_pr_session_when_reopening_same_head() {
         .unwrap();
 
     // then the persisted session branch reattaches reviewed state and drafts.
+    assert_eq!(reopened.session.id, persisted_session_id);
     let stable_review = reopened.session.files.get(&stable_path).unwrap();
     assert!(stable_review.reviewed);
     assert_eq!(stable_review.file_comments.len(), 1);
     assert_eq!(stable_review.file_comments[0].content, "persisted draft");
+}
+
+#[test]
+fn should_carry_previous_pr_session_when_new_head_opens_in_fresh_app() {
+    // given a saved old-head session with drafts and reviewed state
+    let _reviews = TestReviewsDir::new();
+    let mut app = build_app();
+    let repository = ForgeRepository::local("agavra", "tuicr");
+    let mut summary = sample_pr(424257, "fresh-process");
+    summary.repository = repository.clone();
+    let mut details_a = test_pr_details(424257, "fresh-process");
+    details_a.repository = repository;
+    details_a.head_sha = "aaaaaaaaaaaaaaaa".to_string();
+    let stable_path = PathBuf::from("src/stable.rs");
+    let changed_path = PathBuf::from("src/changed.rs");
+    let backend_a = Box::new(FakeForgeBackend::open_pr_details(
+        details_a.clone(),
+        two_file_patch("new changed"),
+    ));
+    app.open_pr_with_backend(&summary, backend_a, None).unwrap();
+    let stable_hunk = app
+        .diff_files
+        .iter()
+        .find(|file| file.display_path() == &stable_path)
+        .and_then(|file| file.hunk_review_key(0))
+        .unwrap();
+    let changed_hunk = app
+        .diff_files
+        .iter()
+        .find(|file| file.display_path() == &changed_path)
+        .and_then(|file| file.hunk_review_key(0))
+        .unwrap();
+    for (path, hunk) in [
+        (&stable_path, stable_hunk.clone()),
+        (&changed_path, changed_hunk),
+    ] {
+        let review = app.session.get_file_mut(path).unwrap();
+        review.reviewed = true;
+        review.toggle_hunk_reviewed(hunk);
+    }
+    app.session
+        .get_file_mut(&stable_path)
+        .unwrap()
+        .add_file_comment(Comment::new(
+            "local draft".to_string(),
+            CommentType::from_id("note"),
+            None,
+        ));
+    let mut submitted = Comment::new(
+        "submitted comment".to_string(),
+        CommentType::from_id("note"),
+        None,
+    );
+    submitted.lifecycle_state = crate::model::comment::CommentLifecycleState::Submitted;
+    app.session.review_comments.push(submitted);
+    let old_path = crate::persistence::save_session(&app.session).unwrap();
+    let old_contents = std::fs::read(&old_path).unwrap();
+
+    // when a fresh app opens the same PR at a new head with one changed file
+    let mut details_b = details_a;
+    details_b.head_sha = "bbbbbbbbbbbbbbbb".to_string();
+    let mut reopened = build_app();
+    let backend_b = Box::new(FakeForgeBackend::open_pr_details(
+        details_b,
+        two_file_patch("newer changed"),
+    ));
+    reopened
+        .open_pr_with_backend(&summary, backend_b, None)
+        .unwrap();
+
+    // then drafts and unchanged reviewed marks move forward, while changed
+    // content and locked comments do not.
+    assert!(reopened.session.is_file_reviewed(&stable_path));
+    assert!(
+        reopened
+            .session
+            .is_hunk_reviewed(&stable_path, &stable_hunk)
+    );
+    assert!(!reopened.session.is_file_reviewed(&changed_path));
+    assert!(
+        reopened
+            .session
+            .files
+            .get(&changed_path)
+            .unwrap()
+            .reviewed_hunks
+            .is_empty()
+    );
+    let stable_review = reopened.session.files.get(&stable_path).unwrap();
+    assert_eq!(stable_review.file_comments.len(), 1);
+    assert_eq!(stable_review.file_comments[0].content, "local draft");
+    assert!(reopened.session.review_comments.is_empty());
+    assert_eq!(std::fs::read(old_path).unwrap(), old_contents);
+}
+
+#[test]
+fn should_open_fresh_pr_session_when_no_previous_session_exists() {
+    let _reviews = TestReviewsDir::new();
+    let mut app = build_app();
+    let summary = sample_pr(424258, "fresh");
+    let mut details = test_pr_details(424258, "fresh");
+    details.head_sha = "bbbbbbbbbbbbbbbb".to_string();
+    let backend = Box::new(FakeForgeBackend::open_pr_details(
+        details,
+        two_file_patch("new changed"),
+    ));
+
+    app.open_pr_with_backend(&summary, backend, None).unwrap();
+
+    assert!(!app.session.has_comments());
+    assert!(!app.session.has_reviewed_state());
 }
 
 #[test]
