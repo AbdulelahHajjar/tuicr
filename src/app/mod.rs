@@ -46,21 +46,30 @@ fn create_forge_backend(
     local_checkout: Option<PathBuf>,
     show_pr_checks: bool,
     show_pr_comments: bool,
-) -> Box<dyn ForgeBackend> {
+) -> Result<Box<dyn ForgeBackend>> {
     use crate::forge::traits::ForgeKind;
     match repo.kind {
+        ForgeKind::Local => {
+            use crate::forge::local::LocalForgeBackend;
+            let checkout = local_checkout.ok_or_else(|| {
+                TuicrError::Forge("Local pull requests require a checkout path".to_string())
+            })?;
+            Ok(Box::new(LocalForgeBackend::new(repo.clone(), checkout)?))
+        }
         ForgeKind::GitHub => {
             use crate::forge::github::gh::GitHubGhBackend;
-            Box::new(
+            Ok(Box::new(
                 GitHubGhBackend::new(Some(repo.clone()))
                     .with_local_checkout(local_checkout)
                     .with_pr_checks(show_pr_checks)
                     .with_pr_comments(show_pr_comments),
-            )
+            ))
         }
         ForgeKind::GitLab => {
             use crate::forge::gitlab::GitLabGlabBackend;
-            Box::new(GitLabGlabBackend::new(Some(repo.clone())).with_local_checkout(local_checkout))
+            Ok(Box::new(
+                GitLabGlabBackend::new(Some(repo.clone())).with_local_checkout(local_checkout),
+            ))
         }
         ForgeKind::Gitea => {
             use crate::forge::gitea::GiteaTeaBackend;
@@ -73,15 +82,15 @@ fn create_forge_backend(
         }
         ForgeKind::Bitbucket => {
             use crate::forge::bitbucket::BitbucketBktBackend;
-            Box::new(
+            Ok(Box::new(
                 BitbucketBktBackend::new(Some(repo.clone())).with_local_checkout(local_checkout),
-            )
+            ))
         }
         ForgeKind::AzureDevOps => {
             use crate::forge::azure::AzureDevOpsBackend;
-            Box::new(
+            Ok(Box::new(
                 AzureDevOpsBackend::new(Some(repo.clone())).with_local_checkout(local_checkout),
-            )
+            ))
         }
         ForgeKind::Gerrit => {
             use crate::forge::gerrit::GerritBackend;
@@ -1783,7 +1792,7 @@ pub struct AppStartupOptions<'a> {
     pub commit_selection: CommitSelectionStart,
     /// Direct PR target (`tuicr pr <target>`). Mutually exclusive with the
     /// other selectors above; the binary validates that before reaching here.
-    pub pr_target: Option<&'a str>,
+    pub pr: Option<&'a crate::cli::PrInvocation>,
     /// `--repo-url` or `--remote` override for PR operations, resolved into a
     /// `ForgeRepository`. When `Some`, the canonical resolver short-circuits
     /// the `gh api` parent lookup and uses this value directly.

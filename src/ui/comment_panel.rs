@@ -424,6 +424,7 @@ pub fn format_remote_review_summary_lines(
 
 fn forge_badge_label(kind: Option<ForgeKind>) -> &'static str {
     match kind {
+        Some(ForgeKind::Local) => "local",
         Some(ForgeKind::GitHub) => "github",
         Some(ForgeKind::GitLab) => "gitlab",
         Some(ForgeKind::Gitea) => "gitea",

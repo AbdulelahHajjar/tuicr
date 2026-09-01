@@ -6,6 +6,19 @@ struct PrDisplayOptions {
     show_comments: bool,
 }
 
+fn parse_forge_pr_target(target: &str) -> Option<crate::forge::traits::PullRequestTarget> {
+    use crate::forge::azure::az::parse_pull_request_target_azure;
+    use crate::forge::bitbucket::bkt::parse_pull_request_target_bitbucket;
+    use crate::forge::github::gh::parse_pull_request_target;
+    use crate::forge::gitlab::glab::parse_pull_request_target_gitlab;
+
+    parse_pull_request_target_bitbucket(target)
+        .or_else(|_| parse_pull_request_target(target))
+        .or_else(|_| parse_pull_request_target_gitlab(target))
+        .or_else(|_| parse_pull_request_target_azure(target))
+        .ok()
+}
+
 impl App {
     pub fn new(
         theme: Theme,
@@ -16,12 +29,12 @@ impl App {
         // `tuicr pr <target>` mode: enter PR review directly, skipping the
         // selector. Errors here surface before TUI startup like other
         // startup failures.
-        if let Some(target) = options.pr_target {
+        if let Some(invocation) = options.pr {
             return Self::new_from_pr_target_with_pr_display_options(
                 theme,
                 comment_type_configs,
                 output_to_stdout,
-                target,
+                invocation,
                 options.repo_url_override.clone(),
                 options.commit_selection,
                 PrDisplayOptions {
@@ -807,11 +820,15 @@ impl App {
         repo_url_override: Option<ForgeRepository>,
         commit_selection: CommitSelectionStart,
     ) -> Result<Self> {
+        let invocation = crate::cli::PrInvocation {
+            target: Some(target.to_string()),
+            base: None,
+        };
         Self::new_from_pr_target_with_pr_display_options(
             theme,
             comment_type_configs,
             output_to_stdout,
-            target,
+            &invocation,
             repo_url_override,
             commit_selection,
             PrDisplayOptions {
@@ -825,35 +842,21 @@ impl App {
         theme: Theme,
         comment_type_configs: Option<Vec<CommentTypeConfig>>,
         output_to_stdout: bool,
-        target: &str,
+        invocation: &crate::cli::PrInvocation,
         repo_url_override: Option<ForgeRepository>,
         commit_selection: CommitSelectionStart,
         display_options: PrDisplayOptions,
     ) -> Result<Self> {
-        use crate::forge::azure::az::parse_pull_request_target_azure;
-        use crate::forge::bitbucket::bkt::parse_pull_request_target_bitbucket;
-        use crate::forge::gerrit::api::parse_pull_request_target_gerrit;
-        use crate::forge::gitea::tea::parse_pull_request_target_gitea;
-        use crate::forge::github::gh::parse_pull_request_target;
-        use crate::forge::gitlab::glab::parse_pull_request_target_gitlab;
         use crate::forge::pr_open::open_pull_request;
         use crate::forge::traits::ForgeKind;
 
         // Bitbucket first: its URL shape (`/pull-requests/<n>`) is distinct,
-        // and the GitHub parser would otherwise claim the host. Gitea next:
-        // its `/pulls/<n>` URL differs from GitHub's singular `/pull/<n>`, but
-        // only the Gitea parser knows which self-hosted hosts are Gitea, and
-        // it must see a host-qualified `host/owner/repo#N` before GitHub's
-        // parser claims it. GitHub then handles numeric / `owner/repo#N` /
-        // GitHub URLs, GitLab handles `/-/merge_requests/<n>`, and the Azure
-        // (`/pullrequest/<n>`) and Gerrit (`/c/<project>/+/<n>`) URL shapes
-        // fall through last.
-        let parsed = parse_pull_request_target_bitbucket(target)
-            .or_else(|_| parse_pull_request_target_gitea(target))
-            .or_else(|_| parse_pull_request_target(target))
-            .or_else(|_| parse_pull_request_target_gitlab(target))
-            .or_else(|_| parse_pull_request_target_azure(target))
-            .or_else(|_| parse_pull_request_target_gerrit(target))?;
+        // and the GitHub parser would otherwise claim the host. GitHub then
+        // handles numeric / `owner/repo#N` / GitHub URLs, GitLab handles
+        // `/-/merge_requests/<n>`, and an Azure DevOps PR URL falls through to
+        // the Azure parser last.
+        let target = invocation.target.as_deref();
+        let parsed_remote = target.and_then(parse_forge_pr_target);
 
         // Resolution order when the target lacks an explicit repo
         // (`tuicr pr 125`):
@@ -865,51 +868,62 @@ impl App {
         // URL- and owner-repo-hash targets carry their own repository, which
         // wins over all of the above since it's PR-specific.
         let local_repo_root = std::env::current_dir().ok();
-        let detected_repo = local_repo_root
-            .as_deref()
-            .and_then(crate::forge::detect_forge_repository);
-
-        // Canonical resolution (fork parent lookup) only works for GitHub.
-        let canonical_repo = detected_repo.as_ref().and_then(|origin| {
-            if origin.kind == ForgeKind::GitHub {
-                use crate::forge::canonical::resolve_canonical_repository;
-                use crate::forge::github::gh::SystemGhRunner;
-                Some(resolve_canonical_repository(
-                    origin,
-                    repo_url_override.as_ref(),
-                    &SystemGhRunner,
-                ))
-            } else {
-                None
-            }
-        });
-        let target_repo = parsed
-            .repository
-            .clone()
-            .or_else(|| repo_url_override.clone())
-            .or_else(|| canonical_repo.clone())
-            .or_else(|| detected_repo.clone())
-            .ok_or_else(|| {
-                TuicrError::Forge(
-                    "tuicr pr <number> requires a local forge remote. \
-                     Use owner/repo#N or a full PR URL outside a checkout."
-                        .to_string(),
-                )
-            })?;
-
-        // Use the local checkout for `.tuicrignore` only when it matches the
-        // PR's target repository — using a foreign repo's checkout would
-        // mis-filter the PR diff.
-        let local_checkout_for_target = local_repo_root
-            .as_deref()
-            .and_then(|root| crate::forge::local_checkout_for_repo(root, &target_repo));
+        let (parsed, target_repo, local_checkout_for_target) = if let Some(parsed) = parsed_remote {
+            let detected_repo = local_repo_root
+                .as_deref()
+                .and_then(crate::forge::detect_forge_repository);
+            let canonical_repo = detected_repo.as_ref().and_then(|origin| {
+                if origin.kind == ForgeKind::GitHub {
+                    use crate::forge::canonical::resolve_canonical_repository;
+                    use crate::forge::github::gh::SystemGhRunner;
+                    Some(resolve_canonical_repository(
+                        origin,
+                        repo_url_override.as_ref(),
+                        &SystemGhRunner,
+                    ))
+                } else {
+                    None
+                }
+            });
+            let target_repo = parsed
+                .repository
+                .clone()
+                .or_else(|| repo_url_override.clone())
+                .or(canonical_repo)
+                .or(detected_repo)
+                .ok_or_else(|| {
+                    TuicrError::Forge(
+                        "tuicr pr <number> requires a local forge remote. \
+                         Use owner/repo#N or a full PR URL outside a checkout."
+                            .to_string(),
+                    )
+                })?;
+            let local_checkout = local_repo_root
+                .as_deref()
+                .and_then(|root| crate::forge::local_checkout_for_repo(root, &target_repo));
+            (parsed, target_repo, local_checkout)
+        } else {
+            let checkout = local_repo_root
+                .as_deref()
+                .ok_or(TuicrError::NotARepository)?;
+            let resolved = crate::forge::local::target::resolve_local_target(
+                checkout,
+                target,
+                invocation.base.as_deref(),
+            )?;
+            (
+                resolved.target,
+                resolved.repository,
+                Some(resolved.checkout),
+            )
+        };
 
         let backend = create_forge_backend(
             &target_repo,
             local_checkout_for_target.clone(),
             display_options.show_checks,
             display_options.show_comments,
-        );
+        )?;
         let highlighter = theme.syntax_highlighter();
         let opened = open_pull_request(
             backend.as_ref(),
@@ -988,5 +1002,23 @@ impl App {
         // the receiver via `poll_pr_threads_events` once it begins.
         app.spawn_pr_threads_fetch(&details_for_threads, local_checkout_for_target);
         Ok(app)
+    }
+}
+
+#[cfg(test)]
+mod pr_target_tests {
+    use super::parse_forge_pr_target;
+
+    #[test]
+    fn should_classify_numeric_target_as_existing_forge_pr() {
+        let target = parse_forge_pr_target("125").unwrap();
+
+        assert_eq!(target.number, 125);
+        assert!(target.repository.is_none());
+    }
+
+    #[test]
+    fn should_leave_branch_name_for_local_target_resolution() {
+        assert!(parse_forge_pr_target("feature/local-forge").is_none());
     }
 }

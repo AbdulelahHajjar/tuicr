@@ -9,6 +9,8 @@ use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 use crate::theme::{AppearanceArg, ThemeArg};
 
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+local-forge");
+
 /// CLI arguments consumed by the rest of the binary.
 #[derive(Debug, Clone, Default)]
 pub struct CliArgs {
@@ -28,8 +30,8 @@ pub struct CliArgs {
     pub file_path: Option<String>,
     /// Whole-repo annotation mode.
     pub all_files: bool,
-    /// Direct PR target from `tuicr pr <target>`.
-    pub pr_target: Option<String>,
+    /// Direct PR invocation from `tuicr pr [<target>]`.
+    pub pr: Option<PrInvocation>,
     /// Override the GitHub repo used for PR operations.
     pub repo_url: Option<String>,
     /// Use a named VCS remote for PR operations.
@@ -45,7 +47,7 @@ pub struct CliArgs {
 #[derive(Parser, Debug)]
 #[command(
     name = "tuicr",
-    version,
+    version = VERSION,
     about = "A code review TUI with vim keybindings. Export to GitHub or clipboard.",
     after_help = "Press ? in the application for keybinding help.",
     disable_help_subcommand = true
@@ -185,10 +187,23 @@ enum TuiSubcmd {
 #[derive(Args, Debug, Clone, Default)]
 struct PrCommand {
     /// PR target: <number>, <owner/repo#N>, or a PR URL.
-    target: String,
+    target: Option<String>,
+
+    /// Local base ref. Used only when the target is a local branch.
+    #[arg(long, value_name = "REF")]
+    base: Option<String>,
 
     #[command(flatten)]
     options: TuiOptions,
+}
+
+/// A direct pull-request invocation, including Local forge options.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrInvocation {
+    /// Existing forge target or local branch name; absent means the current branch.
+    pub target: Option<String>,
+    /// Explicit base ref for a Local pull request.
+    pub base: Option<String>,
 }
 
 /// Non-interactive review session commands.
@@ -288,12 +303,14 @@ pub enum LineSideArg {
 
 impl From<Cli> for CliArgs {
     fn from(cli: Cli) -> Self {
-        let (options, pr_target, review_command, update_version, update_command) = match cli.command
-        {
+        let (options, pr, review_command, update_version, update_command) = match cli.command {
             Some(Subcmd::Tui(command)) => match command.command {
                 Some(TuiSubcmd::Pr(pr)) => (
                     cli.tui_options.merge(command.options).merge(pr.options),
-                    Some(pr.target),
+                    Some(PrInvocation {
+                        target: pr.target,
+                        base: pr.base,
+                    }),
                     None,
                     None,
                     false,
@@ -308,7 +325,10 @@ impl From<Cli> for CliArgs {
             },
             Some(Subcmd::Pr(pr)) => (
                 cli.tui_options.merge(pr.options),
-                Some(pr.target),
+                Some(PrInvocation {
+                    target: pr.target,
+                    base: pr.base,
+                }),
                 None,
                 None,
                 false,
@@ -329,7 +349,7 @@ impl From<Cli> for CliArgs {
             path_filter: options.path_filter,
             file_path: options.file_path,
             all_files: options.all_files,
-            pr_target,
+            pr,
             repo_url: options.repo_url,
             remote: options.remote,
             review_command,
@@ -725,6 +745,16 @@ mod tests {
     }
 
     #[test]
+    fn should_print_local_forge_build_metadata_in_version() {
+        let error = Cli::try_parse_from(["tuicr", "--version"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+        assert_eq!(
+            error.to_string(),
+            format!("tuicr {}+local-forge\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
     fn should_parse_specific_update_version() {
         let parsed = parse_for_test(&["tuicr", "update", "0.18.0"]).expect("parse should succeed");
         assert!(parsed.update_command);
@@ -750,26 +780,29 @@ mod tests {
     #[test]
     fn should_parse_pr_target_as_bare_number() {
         let parsed = parse_for_test(&["tuicr", "pr", "125"]).expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("125".to_string()));
+        assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
     }
 
     #[test]
     fn should_parse_mr_alias_like_pr() {
         let parsed = parse_for_test(&["tuicr", "mr", "125"]).expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("125".to_string()));
+        assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
     }
 
     #[test]
     fn should_parse_tui_mr_alias_like_pr() {
         let parsed = parse_for_test(&["tuicr", "tui", "mr", "125"]).expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("125".to_string()));
+        assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
     }
 
     #[test]
     fn should_parse_pr_target_as_owner_repo_hash() {
         let parsed =
             parse_for_test(&["tuicr", "pr", "agavra/tuicr#125"]).expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("agavra/tuicr#125".to_string()));
+        assert_eq!(
+            parsed.pr.unwrap().target,
+            Some("agavra/tuicr#125".to_string())
+        );
     }
 
     #[test]
@@ -777,15 +810,28 @@ mod tests {
         let parsed = parse_for_test(&["tuicr", "pr", "https://github.com/agavra/tuicr/pull/125"])
             .expect("parse should succeed");
         assert_eq!(
-            parsed.pr_target,
+            parsed.pr.unwrap().target,
             Some("https://github.com/agavra/tuicr/pull/125".to_string()),
         );
     }
 
     #[test]
-    fn should_error_when_pr_target_is_missing() {
-        let err = parse_for_test(&["tuicr", "pr"]).expect_err("parse should fail");
-        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    fn should_parse_pr_without_target_for_current_local_branch() {
+        let parsed = parse_for_test(&["tuicr", "pr"]).expect("parse should succeed");
+        assert_eq!(parsed.pr, Some(PrInvocation::default()));
+    }
+
+    #[test]
+    fn should_parse_local_pr_base_override() {
+        let parsed = parse_for_test(&["tuicr", "pr", "--base", "develop", "feature"])
+            .expect("parse should succeed");
+        assert_eq!(
+            parsed.pr,
+            Some(PrInvocation {
+                target: Some("feature".to_string()),
+                base: Some("develop".to_string()),
+            })
+        );
     }
 
     #[test]
@@ -793,7 +839,7 @@ mod tests {
         // Legacy `tuicr pr` still accepts TUI flags on the subcommand.
         let parsed = parse_for_test(&["tuicr", "pr", "125", "--theme", "dark"])
             .expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("125".to_string()));
+        assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
         assert_eq!(parsed.theme, Some("dark".to_string()));
     }
 
@@ -801,7 +847,7 @@ mod tests {
     fn should_allow_root_tui_options_before_legacy_pr_subcommand() {
         let parsed = parse_for_test(&["tuicr", "--theme", "dark", "pr", "125"])
             .expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("125".to_string()));
+        assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
         assert_eq!(parsed.theme, Some("dark".to_string()));
     }
 
@@ -811,7 +857,7 @@ mod tests {
             .expect("parse should succeed");
         assert!(parsed.working_tree);
         assert_eq!(parsed.theme, Some("dark".to_string()));
-        assert_eq!(parsed.pr_target, None);
+        assert_eq!(parsed.pr, None);
         assert_eq!(parsed.review_command, None);
     }
 
@@ -819,7 +865,7 @@ mod tests {
     fn should_parse_explicit_tui_pr_command() {
         let parsed = parse_for_test(&["tuicr", "tui", "pr", "125", "--theme", "dark"])
             .expect("parse should succeed");
-        assert_eq!(parsed.pr_target, Some("125".to_string()));
+        assert_eq!(parsed.pr.unwrap().target, Some("125".to_string()));
         assert_eq!(parsed.theme, Some("dark".to_string()));
     }
 
@@ -831,9 +877,9 @@ mod tests {
     }
 
     #[test]
-    fn should_leave_pr_target_none_when_no_pr_subcommand() {
+    fn should_leave_pr_invocation_none_when_no_pr_subcommand() {
         let parsed = parse_for_test(&["tuicr"]).expect("parse should succeed");
-        assert_eq!(parsed.pr_target, None);
+        assert_eq!(parsed.pr, None);
     }
 
     #[test]

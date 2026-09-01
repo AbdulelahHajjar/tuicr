@@ -776,6 +776,24 @@ mod tests {
         store.save_review(&session).unwrap()
     }
 
+    fn save_local_pr_session(store: &ReviewStore) -> SessionRef {
+        use crate::forge::traits::{ForgeRepository, PrSessionKey};
+
+        let key = PrSessionKey::new(
+            ForgeRepository::local("slatedb", "slatedb"),
+            7,
+            "43e3566924690c06a45b2177b4dd2df59a0f09c6".to_string(),
+        );
+        let mut session = ReviewSession::new(
+            PathBuf::from("forge:local/slatedb/slatedb"),
+            key.head_sha.clone(),
+            Some("feature".to_string()),
+            SessionDiffSource::PullRequest,
+        );
+        session.pr_session_key = Some(key);
+        store.save_review(&session).unwrap()
+    }
+
     #[test]
     fn should_find_pr_session_by_repo_coordinate() {
         let temp = tempdir().unwrap();
@@ -794,6 +812,32 @@ mod tests {
         let resolved =
             resolve_session_ref(&store, Path::new("slatedb/slatedb"), &listed[0].slug).unwrap();
         assert_eq!(resolved, session_ref);
+    }
+
+    #[test]
+    fn should_list_and_resolve_local_pr_session_as_pr_kind() {
+        let temp = tempdir().unwrap();
+        let store = ReviewStore::with_reviews_dir(temp.path().join("reviews"));
+        let expected = save_local_pr_session(&store);
+        let checkout = temp.path().join("checkout");
+        let repository = git2::Repository::init(&checkout).unwrap();
+        repository
+            .remote("origin", "https://github.com/slatedb/slatedb.git")
+            .unwrap();
+
+        let listed = store
+            .list_sessions_for_repo(Path::new("slatedb/slatedb"))
+            .unwrap();
+        let listed_from_checkout = store.list_sessions_for_repo(&checkout).unwrap();
+        let resolved =
+            resolve_session_ref(&store, Path::new("ignored"), "local:slatedb/slatedb/pr/7")
+                .unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].slug, "local:slatedb/slatedb/pr/7");
+        assert_eq!(listed[0].kind, crate::review_store::SessionKind::Pr);
+        assert_eq!(listed_from_checkout[0].slug, listed[0].slug);
+        assert_eq!(resolved, expected);
     }
 
     #[test]

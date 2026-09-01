@@ -53,7 +53,6 @@ impl App {
             }
             _ => pr.key.head_sha.clone(),
         };
-
         // Source of truth for the diff: when the inline commit selector is
         // showing a strict subset, `range_diff_files` carries the merged
         // subset diff; otherwise `diff_files` is canonical.
@@ -288,6 +287,10 @@ impl App {
         if self.pr_submit_state.is_some() {
             return Ok(()); // already in flight; ignore
         }
+        let diff_start_sha = self
+            .pr_range_sha_pair()
+            .map(|(start_sha, _)| start_sha)
+            .unwrap_or_else(|| pr.base_sha.clone());
 
         let Some(state) = self.submit_state.take() else {
             return Ok(());
@@ -371,19 +374,27 @@ impl App {
                 pr_number,
                 pr_number.to_string(),
             );
-            let result = match backend.get_pull_request(target) {
-                Ok(details) => backend
-                    .create_review(
-                        &details,
-                        CreateReviewRequest {
-                            event,
-                            commit_id: &commit_id,
-                            body: &body,
-                            comments: &mappable,
-                        },
-                    )
-                    .map_err(|e| e.to_string()),
-                Err(e) => Err(e.to_string()),
+            let result = match backend {
+                Ok(backend) => match backend.get_pull_request(target) {
+                    Ok(mut details) => {
+                        if details.repository.kind == crate::forge::traits::ForgeKind::Local {
+                            details.diff_start_sha = Some(diff_start_sha);
+                        }
+                        backend
+                            .create_review(
+                                &details,
+                                CreateReviewRequest {
+                                    event,
+                                    commit_id: &commit_id,
+                                    body: &body,
+                                    comments: &mappable,
+                                },
+                            )
+                            .map_err(|e| e.to_string())
+                    }
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
             };
             let _ = tx.send(PrSubmitEvent::Done {
                 repository,

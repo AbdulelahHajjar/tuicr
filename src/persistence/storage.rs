@@ -377,7 +377,7 @@ fn upsert_session_manifest(
     manifest::save_manifest(reviews_dir, &manifest)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         TuicrError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -401,24 +401,32 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-struct ReviewsDirLock {
+struct DirectoryLock {
     path: PathBuf,
 }
 
-impl Drop for ReviewsDirLock {
+impl Drop for DirectoryLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
 }
 
 fn with_reviews_dir_lock<T>(reviews_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _lock = acquire_reviews_dir_lock(reviews_dir)?;
+    with_directory_lock(reviews_dir, STORAGE_LOCK_FILENAME, f)
+}
+
+pub(crate) fn with_directory_lock<T>(
+    directory: &Path,
+    lock_filename: &str,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let _lock = acquire_directory_lock(directory, lock_filename)?;
     f()
 }
 
-fn acquire_reviews_dir_lock(reviews_dir: &Path) -> Result<ReviewsDirLock> {
-    fs::create_dir_all(reviews_dir)?;
-    let path = reviews_dir.join(STORAGE_LOCK_FILENAME);
+fn acquire_directory_lock(directory: &Path, lock_filename: &str) -> Result<DirectoryLock> {
+    fs::create_dir_all(directory)?;
+    let path = directory.join(lock_filename);
     let started = Instant::now();
     loop {
         match fs::OpenOptions::new()
@@ -429,10 +437,10 @@ fn acquire_reviews_dir_lock(reviews_dir: &Path) -> Result<ReviewsDirLock> {
             Ok(mut file) => {
                 let _ = writeln!(file, "{} {}", std::process::id(), Utc::now());
                 let _ = file.sync_all();
-                return Ok(ReviewsDirLock { path });
+                return Ok(DirectoryLock { path });
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                if remove_stale_reviews_dir_lock(&path)? {
+                if remove_stale_directory_lock(&path)? {
                     continue;
                 }
                 if started.elapsed() >= STORAGE_LOCK_TIMEOUT {
@@ -451,7 +459,7 @@ fn acquire_reviews_dir_lock(reviews_dir: &Path) -> Result<ReviewsDirLock> {
     }
 }
 
-fn remove_stale_reviews_dir_lock(path: &Path) -> Result<bool> {
+fn remove_stale_directory_lock(path: &Path) -> Result<bool> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),

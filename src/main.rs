@@ -67,12 +67,8 @@ fn main() -> anyhow::Result<()> {
     // This also configures syntax highlighting colors before diff parsing
     let mut cli_args = profile::time("startup.parse_cli_args", parse_cli_args);
     if cli_args.update_command {
-        let outcome = match cli_args.update_version.as_ref() {
-            Some(version) => update::update_to_version(version)?,
-            None => update::update_installed()?,
-        };
-        println!("{outcome}");
-        return Ok(());
+        eprintln!("{}", update::LOCAL_FORGE_UPDATE_MESSAGE);
+        std::process::exit(1);
     }
     if let Some(review_command) = cli_args.review_command.take() {
         tuicr::review_cli::run(review_command)?;
@@ -234,7 +230,7 @@ fn main() -> anyhow::Result<()> {
                 git_backend_preference,
                 diff_whitespace_mode,
                 commit_selection,
-                pr_target: cli_args.pr_target.as_deref(),
+                pr: cli_args.pr.as_ref(),
                 repo_url_override,
             },
         )

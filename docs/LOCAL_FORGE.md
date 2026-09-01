@@ -19,10 +19,14 @@ here follows the conventions of the existing forge modules (see `AGENTS.md`,
 - **Checkout** — the git working copy tuicr was started in (`std::env::current_dir()`
   resolved to its repository root). Always a real git repository.
 - **Base branch** — the branch a local pull request is compared against.
-  Resolution order: `--base <ref>` on the command line; the branch that
-  `refs/remotes/origin/HEAD` points at; the first of `develop`, `main`,
-  `master` that exists as a local branch. Otherwise opening fails with an
-  error that names all three sources.
+  Resolution order: `--base <ref>` on the command line (must name a branch or
+  other reference, stored by its shorthand — a moving revision such as
+  `HEAD~2` is rejected); the branch that `refs/remotes/origin/HEAD` points at
+  (its local branch when one exists, else the remote-tracking branch
+  `origin/<name>`); the first of `develop`, `main`, `master` that exists as a
+  local branch. Otherwise opening fails with an error that names all three
+  sources. `--base` combined with a forge target (a number, `owner/repo#N` or
+  a URL) is an error rather than silently ignored.
 - **Head branch** — the local branch under review (`refs/heads/<name>`).
 - **Local pull request** (LPR) — a numbered record `(number, head_ref, base_ref)`
   in the local forge store. One per head branch name per repository; the
@@ -92,7 +96,10 @@ over a directory rather than duplicated. Every file carries `"version": 1`.
   **closed** (`state: "CLOSED"`, `closed: true`, review read-only, head =
   `last_head_sha`); recreating a branch with the same name reopens the same
   number. (Deliberate departure from GitHub, which would open a new PR — a
-  local branch name is the user's identity for the work.)
+  local branch name is the user's identity for the work.) Known limitation: a
+  closed pull's `last_head_sha` is kept alive only by the reflog, so once
+  `git gc` prunes it the closed pull can no longer be opened; the contract
+  forbids writing refs into the repository to pin it.
 - `base_ref` is recorded on creation and updated when the user passes
   `--base`.
 - `last_head_sha` is refreshed on every open/reload.
@@ -138,7 +145,7 @@ a network. The checkout is the source of truth.
 | `list_review_threads(pr)` | Every thread in `threads.json`, re-anchored against the current `base_sha..head_sha` diff (see *Anchoring*). Comments map to `RemoteReviewComment` (`in_reply_to` = root comment id for every comment after the first). Pending-review threads are included (the author sees their own pending comments, as on GitHub). |
 | `fetch_file_lines(request)` / `file_line_count` | Read the blob at `request.sha()` for `request.path` from the checkout. |
 | `local_checkout_path()` | `Some(checkout)`. |
-| `create_review(pr, request)` | Allocate a review id; store the review (`Draft` → `PENDING`, others → their GitHub event name; `commit_id = request.commit_id`; `body`). For each `InlineComment`, create one thread anchored at `(path, line, side)` with `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` = content of that diff line (looked up in the `start..end` patch the comment was mapped against; empty string when it cannot be found), one root comment (`body`, Author, `review_id`). A non-`Draft` event **promotes** every `PENDING` review of the Author to that event (GitHub's "submit pending review"). Return `GhCreateReviewResponse { id, html_url, state }` where `state` is `PENDING`/`COMMENTED`/`APPROVED`/`CHANGES_REQUESTED`. |
+| `create_review(pr, request)` | Allocate a review id; store the review (`Draft` → `PENDING`, others → their GitHub event name; `commit_id = request.commit_id`; `body`). For each `InlineComment`, create one thread anchored at `(path, line, side)` with `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` = content of that diff line (looked up in the `start..end` patch the comment was mapped against; empty string when it cannot be found), one root comment (`body`, Author, `review_id`). A non-`Draft` event with a `PENDING` review of the Author outstanding **submits that pending review in place** (GitHub's "submit pending review"): its event becomes the new event, its body the request body when non-empty, its `submitted_at` now, and the new threads attach to it; the response carries *its* id. Only when no pending review exists is a new review allocated. The range the inline comments were mapped against arrives as `CreateReviewRequest::diff_start_sha` (the parent SHA the displayed diff starts at, `None` for the full pull request); `line_text` is looked up in the `<that start>..<request.commit_id>` patch. Return `GhCreateReviewResponse { id, html_url, state }` where `state` is `PENDING`/`COMMENTED`/`APPROVED`/`CHANGES_REQUESTED`. |
 | `resolve_thread(pr, thread_id, resolved)` — **new trait method** | Set `is_resolved`/`resolved_at` on the thread and persist. Default implementation on the trait: `Err(TuicrError::UnsupportedOperation("Resolving review threads is not supported on <Forge>"))`; no other backend implements it in this version. |
 
 ### Anchoring (outdated detection)
@@ -147,7 +154,7 @@ GitHub keeps a thread's original position and reports `line` on the current
 diff, marking the thread *outdated* when that line is no longer part of it.
 Locally, for each thread:
 
-1. `original_commit == pr.head_sha` → `line = Some(original_line)`, not outdated (fast path).
+1. `original_commit == pr.head_sha` **and** the cumulative diff has `line_text` at `(side, original_line)` (or `line_text` is empty) → `line = Some(original_line)`, not outdated (fast path). The content check matters for comments made against a commit-subset diff: a `LEFT` line number there is an old-line number of the subset's start tree, not of the base tree.
 2. Otherwise take the current cumulative patch for `path` and collect the
    candidate lines on the thread's side — `RIGHT`: added and context lines
    with their *new* line numbers; `LEFT`: deleted and context lines with

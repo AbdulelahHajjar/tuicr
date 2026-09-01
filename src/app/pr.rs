@@ -353,7 +353,9 @@ impl App {
                 diff_start_sha: None,
             };
             let outcome = backend
-                .get_pull_request_commit_range_diff(&details, &start_sha, &end_sha)
+                .and_then(|backend| {
+                    backend.get_pull_request_commit_range_diff(&details, &start_sha, &end_sha)
+                })
                 .map_err(|e| e.to_string());
             let _ = tx.send(PrRangeReloadEvent::Done {
                 request,
@@ -500,7 +502,9 @@ impl App {
             );
             let target =
                 PullRequestTarget::with_repository(repository, pr_number, pr_number.to_string());
-            let outcome = fetch_pr_data(backend.as_ref(), target).map_err(|e| e.to_string());
+            let outcome = backend
+                .and_then(|backend| fetch_pr_data(backend.as_ref(), target))
+                .map_err(|e| e.to_string());
             let _ = tx.send(PrReloadEvent::Done {
                 request,
                 result: outcome,
@@ -585,7 +589,7 @@ impl App {
                 self.show_pr_comments,
             );
             let previous_message = self.message.clone();
-            self.enter_pr_diff_mode(backend, opened)?;
+            self.enter_pr_diff_mode(backend?, opened)?;
             self.spawn_pr_threads_fetch(&details_for_threads, local_checkout);
             if self.message == previous_message {
                 self.set_message("Reloaded PR at new head".to_string());
@@ -644,7 +648,7 @@ impl App {
             self.show_pr_checks,
             self.show_pr_comments,
         );
-        self.reload_pull_request_with_backend(backend, local_checkout)
+        self.reload_pull_request_with_backend(backend?, local_checkout)
     }
 
     /// Inner reload path. Takes the forge backend as a parameter so tests
@@ -747,7 +751,7 @@ impl App {
             let query =
                 PullRequestListQuery::first_page_with_scope(canonical.clone(), PR_PAGE_SIZE, scope);
             let result = backend
-                .list_pull_requests(query)
+                .and_then(|backend| backend.list_pull_requests(query))
                 .map(|page| (page.pull_requests, page.has_more))
                 .map_err(|err| err.to_string());
             let _ = tx.send(PrLoadEvent::Initial { canonical, result });
@@ -778,7 +782,7 @@ impl App {
                 scope,
             };
             let result = backend
-                .list_pull_requests(query)
+                .and_then(|backend| backend.list_pull_requests(query))
                 .map(|page| (page.pull_requests, page.has_more))
                 .map_err(|err| err.to_string());
             let _ = tx.send(PrLoadEvent::LoadMore(result));
@@ -942,7 +946,9 @@ impl App {
             );
             let target =
                 PullRequestTarget::with_repository(summary_repo, pr_number, pr_number.to_string());
-            let outcome = fetch_pr_data(backend.as_ref(), target).map_err(|e| e.to_string());
+            let outcome = backend
+                .and_then(|backend| fetch_pr_data(backend.as_ref(), target))
+                .map_err(|e| e.to_string());
             let _ = tx.send(PrOpenEvent::Done {
                 request,
                 result: outcome,
@@ -1035,7 +1041,7 @@ impl App {
             self.show_pr_comments,
         );
         let previous_message = self.message.clone();
-        self.enter_pr_diff_mode(backend, opened)?;
+        self.enter_pr_diff_mode(backend?, opened)?;
         // Kick the remote-thread fetch off on a fresh background thread.
         // The diff view is already up; threads fade in once they land.
         self.spawn_pr_threads_fetch(&details, local_checkout);
@@ -1077,12 +1083,20 @@ impl App {
                 show_pr_checks,
                 show_pr_comments,
             );
-            let threads = backend
-                .list_review_threads(&details_clone)
-                .map_err(|e| e.to_string());
-            let summaries = backend
-                .list_review_summaries(&details_clone)
-                .map_err(|e| e.to_string());
+            let (threads, summaries) = match backend {
+                Ok(backend) => (
+                    backend
+                        .list_review_threads(&details_clone)
+                        .map_err(|e| e.to_string()),
+                    backend
+                        .list_review_summaries(&details_clone)
+                        .map_err(|e| e.to_string()),
+                ),
+                Err(error) => {
+                    let message = error.to_string();
+                    (Err(message.clone()), Err(message))
+                }
+            };
             let _ = tx.send(PrThreadsEvent::Done {
                 repository,
                 pr_number,

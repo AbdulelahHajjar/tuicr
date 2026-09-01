@@ -10,6 +10,8 @@ use crate::model::{DiffLine, FilePatch, FileStatus};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgeKind {
+    /// A pull request represented by branches in a local checkout.
+    Local,
     GitHub,
     GitLab,
     /// Gitea, reached through the `tea` CLI.
@@ -28,6 +30,7 @@ impl ForgeKind {
     /// Brand name as users expect to see it, for messages and export headers.
     pub fn display_name(self) -> &'static str {
         match self {
+            ForgeKind::Local => "Local",
             ForgeKind::GitHub => "GitHub",
             ForgeKind::GitLab => "GitLab",
             ForgeKind::Gitea => "Gitea",
@@ -47,6 +50,16 @@ pub struct ForgeRepository {
 }
 
 impl ForgeRepository {
+    /// Build the identity for a pull request backed by a local checkout.
+    pub fn local(owner: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            kind: ForgeKind::Local,
+            host: "local".to_string(),
+            owner: owner.into(),
+            name: name.into(),
+        }
+    }
+
     pub fn github(
         host: impl Into<String>,
         owner: impl Into<String>,
@@ -162,7 +175,8 @@ impl ForgeRepository {
                 crate::forge::gerrit::api::gerrit_project(self)
             );
         }
-        if self.host == "github.com"
+        if self.host == "local"
+            || self.host == "github.com"
             || self.host == "gitlab.com"
             || self.host == "bitbucket.org"
             || self.host == "dev.azure.com"
@@ -610,6 +624,19 @@ pub trait ForgeBackend {
         pr: &PullRequestDetails,
         request: CreateReviewRequest<'_>,
     ) -> Result<GhCreateReviewResponse>;
+
+    /// Resolve or reopen a review thread when the forge supports it.
+    fn resolve_thread(
+        &self,
+        pr: &PullRequestDetails,
+        _thread_id: &str,
+        _resolved: bool,
+    ) -> Result<()> {
+        Err(crate::error::TuicrError::UnsupportedOperation(format!(
+            "Resolving review threads is not supported on {}",
+            pr.repository.kind.display_name()
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -629,6 +656,19 @@ mod tests {
         let restored: PrSessionKey = serde_json::from_str(&serialized).unwrap();
         // then
         assert_eq!(key, restored);
+    }
+
+    #[test]
+    fn should_build_and_serialize_local_repository_identity() {
+        let repository = ForgeRepository::local("owner", "name");
+
+        assert_eq!(repository.kind.display_name(), "Local");
+        assert_eq!(repository.host, "local");
+        assert_eq!(repository.display_name(), "owner/name");
+        assert_eq!(
+            serde_json::to_string(&repository.kind).unwrap(),
+            "\"local\""
+        );
     }
 
     #[test]

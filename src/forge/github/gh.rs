@@ -1356,6 +1356,23 @@ index 1111111..2222222 100644
     }
 
     #[test]
+    fn should_report_default_thread_resolution_as_unsupported() {
+        let backend = GitHubGhBackend::with_runner(Some(repo()), FakeGhRunner::default());
+        let details = backend
+            .get_pull_request(parse_pull_request_target("125").unwrap())
+            .unwrap();
+        let error = backend
+            .resolve_thread(&details, "thread", true)
+            .unwrap_err();
+
+        assert!(matches!(error, TuicrError::UnsupportedOperation(_)));
+        assert_eq!(
+            error.to_string(),
+            "Unsupported operation: Resolving review threads is not supported on GitHub"
+        );
+    }
+
+    #[test]
     fn parses_numeric_pull_request_target() {
         let target = parse_pull_request_target("125").unwrap();
         assert_eq!(target.number, 125);

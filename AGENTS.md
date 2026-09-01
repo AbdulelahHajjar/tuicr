@@ -66,6 +66,11 @@ src/
 │   │   ├── mod.rs       # GiteaTeaBackend: ForgeBackend impl
 │   │   ├── tea.rs       # TeaCommandRunner: spawn `tea api -i`, read HTTP status off stderr
 │   │   └── models.rs    # JSON parsing for Gitea REST v1 responses
+│   ├── local/           # Local-branch forge; git-only, no network or checkout writes
+│   │   ├── mod.rs       # LocalForgeBackend and ForgeBackend implementation
+│   │   ├── store.rs     # Versioned local PR, review, and thread persistence
+│   │   ├── target.rs    # Local target, repository identity, and base resolution
+│   │   └── anchor.rs    # Stored-thread re-anchoring and outdated detection
 │   ├── github/          # GitHub backend via `gh` CLI
 │   │   ├── mod.rs       # GitHubGhBackend: ForgeBackend impl
 │   │   ├── gh.rs        # GhCommandRunner: spawn `gh`, parse output, error mapping
@@ -244,6 +249,8 @@ Repository-managed agent integrations:
 ## Forge integration
 
 Forge review (`tuicr pr <target>`, `tuicr mr <target>`, or their explicit `tuicr tui` forms) is the only feature in `src/forge/`. GitHub operations shell out to `gh`; GitLab operations shell out to `glab`; Gitea operations shell out to `tea`; Bitbucket Cloud operations shell out to `bkt`.
+
+`tuicr pr` with no target, or with a local branch name, uses `LocalForgeBackend`. Local forge reads only the checkout's git objects and the existing structured Git diff adapter; it never calls a network forge CLI and never writes inside the checkout or `.git`. Its numbered pull, review, and thread records live under the tuicr data directory. `ForgeBackend::resolve_thread` is implemented only by Local in Stage 1; other backends use the default unsupported-operation error.
 
 Forge selection is host-driven: `parse_any_remote_url` tries Bitbucket (`bitbucket.org` only), then GitLab (host contains `gitlab`, or matches `glab config get host`), then Azure, then Gitea (host contains `gitea`, or matches a login in `tea logins list --output json`; forks like Forgejo are deliberately not matched by name), then GitHub. GitHub must stay last — its parser accepts any host, so it would otherwise claim every Bitbucket, self-hosted GitLab, and self-hosted Gitea remote. Bitbucket Data Center is deliberately unsupported: it speaks REST 1.0, so those remotes are not claimed at all.
 

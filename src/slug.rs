@@ -116,6 +116,7 @@ impl fmt::Display for LocalSlug {
 impl fmt::Display for PrSlug {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self.forge {
+            ForgeKind::Local => "local",
             ForgeKind::GitHub => "gh",
             ForgeKind::GitLab => "gl",
             ForgeKind::Gitea => "gt",
@@ -189,6 +190,7 @@ impl FromStr for Slug {
         // is alphanumeric/dash.
         if let Some((kind, rest)) = s.split_once(':') {
             let forge = match kind {
+                "local" => ForgeKind::Local,
                 "gh" => ForgeKind::GitHub,
                 "gl" => ForgeKind::GitLab,
                 "gt" => ForgeKind::Gitea,
@@ -701,6 +703,7 @@ mod tests {
     fn should_roundtrip_pr_slug() {
         assert_roundtrip("gh:agavra/tuicr/pr/125");
         assert_roundtrip("gh:org/svc/pr/9999");
+        assert_roundtrip("local:owner/name/pr/7");
     }
 
     #[test]
