@@ -302,6 +302,53 @@ pub enum ReviewCommand {
         #[arg(long, value_name = "PATH|OWNER/REPO", default_value = ".")]
         repo: PathBuf,
     },
+
+    /// List forge review threads for a local pull request.
+    Threads {
+        /// PR session slug, e.g. `local:owner/repo/pr/1`.
+        #[arg(long, value_name = "SESSION")]
+        session: String,
+    },
+
+    /// Reply to a forge review thread on a local pull request.
+    Reply {
+        /// PR session slug, e.g. `local:owner/repo/pr/1`.
+        #[arg(long, value_name = "SESSION")]
+        session: String,
+
+        /// Thread id from `tuicr review threads`.
+        #[arg(long, value_name = "THREAD")]
+        thread: String,
+
+        /// Author stamped on the reply. Pass an explicit value when invoking
+        /// from an agent (e.g. `--username "Claude Fable"`) so human and
+        /// agent comments stay visually distinguished.
+        #[arg(long, value_name = "NAME")]
+        username: Option<String>,
+
+        /// Reply text.
+        #[arg(
+            value_name = "COMMENT",
+            value_parser = non_empty_comment_text,
+            allow_hyphen_values = true
+        )]
+        content: String,
+    },
+
+    /// Resolve or unresolve a forge review thread on a local pull request.
+    Resolve {
+        /// PR session slug, e.g. `local:owner/repo/pr/1`.
+        #[arg(long, value_name = "SESSION")]
+        session: String,
+
+        /// Thread id from `tuicr review threads`.
+        #[arg(long, value_name = "THREAD")]
+        thread: String,
+
+        /// Mark the thread unresolved instead.
+        #[arg(long)]
+        unresolve: bool,
+    },
 }
 
 /// Diff side accepted by `tuicr review add --side`.

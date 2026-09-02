@@ -205,3 +205,22 @@ PR slug:
 
 The `author` field is the username stored with the comment. It is present in
 the JSON emitted by both `review add` and `review comments`.
+
+## Forge Threads (local pull requests)
+
+Submitted reviews on a `local:` pull request create forge threads that survive
+head changes; session drafts do not. Three commands let scripts and agents
+work that durable layer directly:
+
+```bash
+tuicr review threads --session local:owner/repo/pr/1
+tuicr review reply   --session local:owner/repo/pr/1 --thread <id> \
+  --username "Claude Fable" "Fixed in abc1234."
+tuicr review resolve --session local:owner/repo/pr/1 --thread <id>
+tuicr review resolve --session local:owner/repo/pr/1 --thread <id> --unresolve
+```
+
+`threads` prints every thread with its id, anchor, resolution state, and
+comments. `reply` appends a comment to a thread and prints it. `resolve`
+flips `is_resolved` (`--unresolve` reopens). All three accept only `local:`
+PR slugs; other forges return an error.

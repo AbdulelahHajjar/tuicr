@@ -266,6 +266,34 @@ impl LocalForgeStore {
         })
     }
 
+    pub(crate) fn reply_to_thread(
+        &self,
+        number: u64,
+        thread_id: &str,
+        author: &str,
+        body: &str,
+    ) -> Result<LocalThreadComment> {
+        with_directory_lock(&self.root, LOCK_FILENAME, || {
+            let mut file = self.load_threads(number)?;
+            let thread = file
+                .threads
+                .iter_mut()
+                .find(|thread| thread.id == thread_id)
+                .ok_or_else(|| {
+                    TuicrError::Forge(format!("Local review thread `{thread_id}` was not found"))
+                })?;
+            let comment = LocalThreadComment {
+                id: uuid::Uuid::new_v4().to_string(),
+                author: author.to_string(),
+                body: body.to_string(),
+                created_at: Utc::now(),
+            };
+            thread.comments.push(comment.clone());
+            self.save_json(&self.threads_path(number), &file)?;
+            Ok(comment)
+        })
+    }
+
     fn pulls_path(&self) -> PathBuf {
         self.root.join("pulls.json")
     }

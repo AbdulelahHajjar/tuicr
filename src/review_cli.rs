@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{LineSideArg, ReviewCommand};
 use crate::config;
 use crate::error::{Result, TuicrError};
+use crate::forge::local::store::LocalForgeStore;
+use crate::forge::traits::{ForgeKind, ForgeRepository};
 use crate::model::comment::{self, CommentLifecycleState};
 use crate::model::{Comment, CommentType, LineRange, LineSide, ReviewSession};
 use crate::review_store::{
@@ -51,6 +53,18 @@ fn run_with_writer(command: ReviewCommand, out: &mut impl Write) -> Result<()> {
             out,
         ),
         ReviewCommand::Comments { session, repo } => show_comments(&session, &repo, out),
+        ReviewCommand::Threads { session } => list_threads(&session, out),
+        ReviewCommand::Reply {
+            session,
+            thread,
+            username,
+            content,
+        } => reply_to_forge_thread(&session, &thread, username, &content, out),
+        ReviewCommand::Resolve {
+            session,
+            thread,
+            unresolve,
+        } => set_thread_resolution(&session, &thread, !unresolve, out),
     }
 }
 
@@ -372,6 +386,69 @@ fn show_comments(session: &str, repo: &Path, out: &mut impl Write) -> Result<()>
     Ok(())
 }
 
+/// Resolve a `local:` PR slug into the forge repository and PR number that
+/// back its thread store. Forge threads only exist for local pull requests
+/// today; other slugs are rejected with a pointer at the supported shape.
+fn local_pr_target(session: &str) -> Result<(ForgeRepository, u64)> {
+    let slug: Slug = session
+        .parse()
+        .map_err(|_| TuicrError::InvalidInput(format!("invalid session slug '{session}'")))?;
+    let Slug::Pr(pr) = slug else {
+        return Err(TuicrError::InvalidInput(
+            "forge threads need a PR session slug like `local:owner/repo/pr/1`".to_string(),
+        ));
+    };
+    if pr.forge != ForgeKind::Local {
+        return Err(TuicrError::InvalidInput(
+            "forge threads are only supported for `local:` pull requests".to_string(),
+        ));
+    }
+    let repository = ForgeRepository::local(pr.owner, pr.repo);
+    Ok((repository, pr.number))
+}
+
+fn list_threads(session: &str, out: &mut impl Write) -> Result<()> {
+    let (repository, number) = local_pr_target(session)?;
+    let store = LocalForgeStore::new(&repository)?;
+    let threads = store.threads(number)?;
+    serde_json::to_writer_pretty(&mut *out, &threads)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn reply_to_forge_thread(
+    session: &str,
+    thread: &str,
+    username: Option<String>,
+    content: &str,
+    out: &mut impl Write,
+) -> Result<()> {
+    let (repository, number) = local_pr_target(session)?;
+    let store = LocalForgeStore::new(&repository)?;
+    let author = resolve_cli_author(username);
+    let comment = store.reply_to_thread(number, thread, &author, content)?;
+    serde_json::to_writer_pretty(&mut *out, &comment)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn set_thread_resolution(
+    session: &str,
+    thread: &str,
+    resolved: bool,
+    out: &mut impl Write,
+) -> Result<()> {
+    let (repository, number) = local_pr_target(session)?;
+    let store = LocalForgeStore::new(&repository)?;
+    store.resolve_thread(number, thread, resolved)?;
+    serde_json::to_writer_pretty(
+        &mut *out,
+        &serde_json::json!({ "thread_id": thread, "is_resolved": resolved }),
+    )?;
+    writeln!(out)?;
+    Ok(())
+}
+
 fn resolve_session_ref(store: &ReviewStore, repo: &Path, session: &str) -> Result<SessionRef> {
     let direct_path = PathBuf::from(session);
     if direct_path.exists() || direct_path.is_absolute() || session.ends_with(".json") {
@@ -651,6 +728,57 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::model::{FileStatus, SessionDiffSource};
+
+    use crate::forge::local::store::{LocalForgeStore, LocalThread};
+
+    #[test]
+    fn should_target_local_pr_slug_for_forge_threads() {
+        let (repository, number) = local_pr_target("local:owner/name/pr/7").unwrap();
+        assert_eq!(number, 7);
+        assert_eq!(repository.owner, "owner");
+        assert_eq!(repository.name, "name");
+        assert_eq!(repository.kind, ForgeKind::Local);
+    }
+
+    #[test]
+    fn should_reject_non_local_slugs_for_forge_threads() {
+        assert!(local_pr_target("gh:owner/name/pr/7").is_err());
+        assert!(local_pr_target("owner/name@main/worktree/abc1234").is_err());
+    }
+
+    #[test]
+    fn should_reply_and_resolve_local_threads() {
+        let dir = tempdir().unwrap();
+        let store = LocalForgeStore::at(dir.path());
+        let thread = LocalThread {
+            id: "t1".to_string(),
+            path: "src/a.rs".to_string(),
+            side: "new".to_string(),
+            original_line: 3,
+            original_commit: "abc".to_string(),
+            base_commit: "base".to_string(),
+            line_text: "let x = 1;".to_string(),
+            created_at: chrono::Utc::now(),
+            is_resolved: false,
+            resolved_at: None,
+            review_id: 0,
+            comments: Vec::new(),
+        };
+        store
+            .add_review(1, "COMMENT", "", "abc", "user", vec![thread])
+            .unwrap();
+
+        let comment = store
+            .reply_to_thread(1, "t1", "Claude Fable", "Done in abc1234.")
+            .unwrap();
+        assert_eq!(comment.author, "Claude Fable");
+
+        store.resolve_thread(1, "t1", true).unwrap();
+        let threads = store.threads(1).unwrap();
+        assert!(threads[0].is_resolved);
+        assert_eq!(threads[0].comments.len(), 1);
+        assert_eq!(threads[0].comments[0].body, "Done in abc1234.");
+    }
 
     fn test_session(repo_path: PathBuf) -> ReviewSession {
         let mut session = ReviewSession::new(
