@@ -56,7 +56,10 @@ pub(crate) struct LocalThread {
     pub created_at: DateTime<Utc>,
     pub is_resolved: bool,
     pub resolved_at: Option<DateTime<Utc>>,
-    pub review_id: u64,
+    /// Review this thread was submitted with; `None` for threads created
+    /// directly, outside any review.
+    #[serde(default)]
+    pub review_id: Option<u64>,
     pub comments: Vec<LocalThreadComment>,
 }
 
@@ -236,12 +239,21 @@ impl LocalForgeStore {
                 review
             };
             for thread in &mut new_threads {
-                thread.review_id = review.id;
+                thread.review_id = Some(review.id);
             }
             threads.threads.extend(new_threads);
             self.save_json(&self.reviews_path(number), &reviews)?;
             self.save_json(&self.threads_path(number), &threads)?;
             Ok(review)
+        })
+    }
+
+    /// Append a thread that belongs to no review.
+    pub(crate) fn add_thread(&self, number: u64, thread: LocalThread) -> Result<()> {
+        with_directory_lock(&self.root, LOCK_FILENAME, || {
+            let mut file = self.load_threads(number)?;
+            file.threads.push(thread);
+            self.save_json(&self.threads_path(number), &file)
         })
     }
 
@@ -440,7 +452,7 @@ mod tests {
             created_at: Utc::now(),
             is_resolved: false,
             resolved_at: None,
-            review_id: 0,
+            review_id: None,
             comments: Vec::new(),
         };
         let submitted = store
@@ -452,7 +464,7 @@ mod tests {
         assert_eq!(reviews[0].event, "COMMENT");
         assert_eq!(reviews[0].body, "final");
         assert_eq!(submitted.id, draft.id);
-        assert_eq!(store.threads(1).unwrap()[0].review_id, draft.id);
+        assert_eq!(store.threads(1).unwrap()[0].review_id, Some(draft.id));
     }
 
     #[test]
@@ -480,7 +492,11 @@ mod tests {
         assert_eq!(approved.body, "second body");
         let threads = store.threads(1).unwrap();
         assert_eq!(threads.len(), 2);
-        assert!(threads.iter().all(|thread| thread.review_id == draft.id));
+        assert!(
+            threads
+                .iter()
+                .all(|thread| thread.review_id == Some(draft.id))
+        );
     }
 
     fn thread(id: &str) -> LocalThread {
@@ -495,9 +511,45 @@ mod tests {
             created_at: Utc::now(),
             is_resolved: false,
             resolved_at: None,
-            review_id: 0,
+            review_id: None,
             comments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn should_append_thread_without_review() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store.open_pull("feature", "main", "aaaa", false).unwrap();
+
+        store.add_thread(1, thread("direct")).unwrap();
+
+        let threads = store.threads(1).unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "direct");
+        assert_eq!(threads[0].review_id, None);
+        assert!(store.reviews(1).unwrap().is_empty());
+        assert!(!store.reviews_path(1).exists());
+    }
+
+    #[test]
+    fn should_load_threads_with_numeric_or_missing_review_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        let mut reviewed = thread("reviewed");
+        reviewed.review_id = Some(3);
+        let mut stored = serde_json::to_value(&reviewed).unwrap();
+        let mut direct = serde_json::to_value(thread("direct")).unwrap();
+        direct.as_object_mut().unwrap().remove("review_id");
+        stored = serde_json::json!({ "version": 1, "threads": [stored, direct] });
+        fs::create_dir_all(store.threads_path(1).parent().unwrap()).unwrap();
+        fs::write(store.threads_path(1), stored.to_string()).unwrap();
+
+        let threads = store.threads(1).unwrap();
+
+        assert_eq!(threads[0].review_id, Some(3));
+        assert_eq!(threads[1].review_id, None);
+        assert!(serde_json::to_value(&threads[1]).unwrap()["review_id"].is_null());
     }
 
     #[test]

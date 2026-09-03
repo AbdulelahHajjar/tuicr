@@ -109,7 +109,7 @@ session_header = true
 | `no_update_check`          | `false`      | Skip startup update check when `true`.                                                                                                                     |
 | `review_watch_interval_ms` | `1000`       | Poll interval for persisted review-session changes. Set to `0` to disable automatic local-session reloads.                                                 |
 | `single_file_view`         | `false`      | Start in single-file view for supported review targets. Pristine `--all-files` mode always starts in single-file view.                                     |
-| `username`                 | `"user"`     | Display name stamped on local comments and used as the viewer identity for local comment coloring.                                                         |
+| `username`                 | `"user"`     | Display name stamped on local comments and on threads opened from the TUI on Local pull requests; also the viewer identity for local comment coloring.      |
 | `diff_watch_interval_ms`   | `0`          | Poll interval for re-reading the local diff so uncommitted changes show without `:e`. The same tick refreshes the commit pane, including the "Staged changes" and "Unstaged changes" rows. `0` (default) disables it. Ignored for PR and `--all-files` reviews. |
 | `local_pr_follow_interval_ms` | `1000`    | Poll interval for following the head branch of a Local pull request. `0` disables auto-follow. Ignored for other forges. |
 | `backend`                  | `libgit2`    | Git backend: `libgit2` or `cli`. Sparse-checkout repos auto-route to `cli`.                                                                                |

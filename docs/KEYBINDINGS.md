@@ -171,6 +171,10 @@ override `$EDITOR`.
 | `Ctrl-u` | Clear line |
 | `Esc` / `Ctrl-c` | Cancel |
 
+On a Local pull request, saving a new line or range comment opens a forge thread immediately,
+authored as the config `username`; file and review comments stay drafts. If the write fails the
+box stays open with its text. See `docs/LOCAL_FORGE.md`.
+
 With `comment_vim = true` the box uses [`edtui`](https://github.com/preiter93/edtui)
 modal editing (Normal/Insert/Visual: `hjkl`, `w`/`b`/`e`, `dd`/`D`/`ciw`/`x`,
 `u`/`Ctrl-r`, visual `v`+`y`/`d`/`p`). From Normal mode `:w` (or `Enter` twice)
@@ -262,6 +266,9 @@ Gitea requires a review summary for `request-changes` and `draft`, and for `comm
 are no inline comments; inline comments alone do not satisfy it. GitLab `draft` creates draft
 notes that the author publishes from GitLab's own "Submit review" UI. Gerrit `draft` stores draft
 comments that the author publishes from Gerrit's Reply UI.
+
+On Local pull requests inline comments are already threads, so `:submit` carries only the verdict
+and any review-level comment body.
 
 `:resolve` and `:unresolve` target a selected remote thread in the comment navigator, a remote
 thread row under the diff cursor, or the first thread anchored to the diff line under the cursor.

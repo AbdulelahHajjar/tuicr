@@ -228,6 +228,12 @@ Omit `--target-file` for a review-level comment. Add `--end-line` for a range
 comment. Use `--side old` for removed lines and `--side new` for added or
 unchanged lines in the new file.
 
+On a `local:` pull request session, a line or range target opens a forge
+thread directly (printed in the `tuicr review threads` shape) and `--repo`
+must be that checkout. Answer existing threads with
+`tuicr review reply --session <slug> --thread <id>` and close them with
+`tuicr review resolve --session <slug> --thread <id>`.
+
 For structured input, use `--input` with literal JSON, `@path/to/file.json`, or
 `-` for stdin. Supported target types are `review`, `file`, `line`, and
 `line_range`. One object per call — an array is a parse error. The file key is

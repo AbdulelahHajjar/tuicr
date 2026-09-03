@@ -2,11 +2,11 @@ use super::*;
 
 impl App {
     pub fn resolve_review_thread_at_cursor(&mut self, resolved: bool) -> Result<()> {
-        let DiffSource::PullRequest(pr) = &self.diff_source else {
+        if !matches!(self.diff_source, DiffSource::PullRequest(_)) {
             return Err(TuicrError::UnsupportedOperation(
                 "Not in PR mode".to_string(),
             ));
-        };
+        }
         let thread_idx = if self.focused_panel == FocusedPanel::Comments {
             self.build_comment_navigator_items()
                 .get(self.comment_navigator_state.selected())
@@ -51,27 +51,9 @@ impl App {
             .get(thread_idx)
             .map(|thread| thread.id.clone())
             .ok_or_else(|| TuicrError::Forge("No review thread at cursor".to_string()))?;
-        let details = match self.pr_info.as_ref() {
-            Some(info) => info.details.clone(),
-            None => crate::forge::traits::PullRequestDetails {
-                repository: pr.key.repository.clone(),
-                number: pr.key.number,
-                title: pr.title.clone(),
-                url: pr.url.clone(),
-                state: pr.state.clone(),
-                is_draft: false,
-                author: None,
-                head_ref_name: pr.head_ref_name.clone(),
-                base_ref_name: pr.base_ref_name.clone(),
-                head_sha: pr.key.head_sha.clone(),
-                base_sha: pr.base_sha.clone(),
-                body: String::new(),
-                updated_at: None,
-                closed: pr.closed,
-                merged_at: None,
-                diff_start_sha: None,
-            },
-        };
+        let details = self
+            .pr_details_snapshot()
+            .ok_or_else(|| TuicrError::UnsupportedOperation("Not in PR mode".to_string()))?;
         let backend = self
             .forge_backend
             .as_deref()

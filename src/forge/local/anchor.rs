@@ -113,7 +113,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             is_resolved: false,
             resolved_at: None,
-            review_id: 1,
+            review_id: Some(1),
             comments: Vec::new(),
         }
     }

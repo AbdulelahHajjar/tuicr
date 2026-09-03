@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::forge::remote_comments::RemoteReviewThread;
-use crate::forge::submit::SubmitEvent;
+use crate::forge::submit::{GhSide, SubmitEvent};
 use crate::model::{DiffLine, FilePatch, FileStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -471,6 +471,21 @@ pub struct CreateReviewRequest<'a> {
     pub comments: &'a [crate::forge::submit::InlineComment],
 }
 
+/// Request to open one review thread directly, outside any review.
+#[derive(Debug, Clone)]
+pub struct CreateThreadRequest<'a> {
+    pub path: &'a Path,
+    pub line: u32,
+    pub side: GhSide,
+    pub body: &'a str,
+    /// Display name for the root comment; `None` uses the backend's own author.
+    pub author: Option<&'a str>,
+    /// SHA the anchor was mapped against.
+    pub commit_id: &'a str,
+    /// Parent SHA of the displayed diff, or `None` for the full pull request.
+    pub diff_start_sha: Option<&'a str>,
+}
+
 /// A single commit on a pull request, as returned by the forge.
 ///
 /// Fields mirror what the inline commit selector needs to render a row.
@@ -647,6 +662,18 @@ pub trait ForgeBackend {
     ) -> Result<()> {
         Err(crate::error::TuicrError::UnsupportedOperation(format!(
             "Resolving review threads is not supported on {}",
+            pr.repository.kind.display_name()
+        )))
+    }
+
+    /// Open a review thread at a diff line when the forge supports it.
+    fn create_thread(
+        &self,
+        pr: &PullRequestDetails,
+        _request: CreateThreadRequest<'_>,
+    ) -> Result<RemoteReviewThread> {
+        Err(crate::error::TuicrError::UnsupportedOperation(format!(
+            "Creating review threads is not supported on {}",
             pr.repository.kind.display_name()
         )))
     }

@@ -1026,6 +1026,26 @@ impl App {
                 Err(e) => format!("Error: Could not save comment: {e}"),
             };
         } else if let Some(path) = self.current_file_path().cloned() {
+            let thread_anchor = if self.comment_is_file_level {
+                None
+            } else {
+                self.comment_line_range
+                    .map(|(range, side)| (range.end, side))
+                    .or(self.comment_line)
+            };
+            if let Some((line, side)) = thread_anchor
+                && self.comments_go_to_threads()
+            {
+                match self.create_local_thread_for_comment(path, line, side, &content) {
+                    Ok(line) => {
+                        self.set_message(format!("Thread created on line {line}"));
+                        self.exit_comment_mode();
+                    }
+                    // Keep the editor open so the text survives a failed write.
+                    Err(error) => self.set_error(format!("Could not create thread: {error}")),
+                }
+                return;
+            }
             let (target, success_message) = if self.comment_is_file_level {
                 (
                     CommentTarget::File { path },

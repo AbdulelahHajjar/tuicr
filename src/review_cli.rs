@@ -9,8 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{LineSideArg, ReviewCommand};
 use crate::config;
 use crate::error::{Result, TuicrError};
-use crate::forge::local::store::LocalForgeStore;
-use crate::forge::traits::{ForgeKind, ForgeRepository};
+use crate::forge::local::LocalForgeBackend;
+use crate::forge::local::store::{LocalForgeStore, LocalThread};
+use crate::forge::local::target::local_repository;
+use crate::forge::submit::{GhSide, comment_type_prefix};
+use crate::forge::traits::{
+    CreateThreadRequest, ForgeBackend, ForgeKind, ForgeRepository, PullRequestTarget,
+};
 use crate::model::comment::{self, CommentLifecycleState};
 use crate::model::{Comment, CommentType, LineRange, LineSide, ReviewSession};
 use crate::review_store::{
@@ -101,9 +106,30 @@ fn add_comment(
     options: AddCommentOptions,
     out: &mut impl Write,
 ) -> Result<()> {
+    let request_parts = build_add_request_parts(options)?;
+    if let Some((repository, number)) = parse_local_pr_slug(session)
+        && let Some((path, line, side)) = thread_anchor(&request_parts.target)
+    {
+        let thread = add_local_thread(
+            session,
+            repo,
+            repository,
+            number,
+            LocalThreadInput {
+                path,
+                line,
+                side,
+                comment_type: &request_parts.comment_type,
+                content: &request_parts.content,
+                username: request_parts.username,
+            },
+        )?;
+        serde_json::to_writer_pretty(&mut *out, &thread)?;
+        writeln!(out)?;
+        return Ok(());
+    }
     let store = ReviewStore::new();
     let session_ref = resolve_session_ref(&store, repo, session)?;
-    let request_parts = build_add_request_parts(options)?;
     let target = request_parts.target;
     let comment_type = CommentType::from_id(&request_parts.comment_type);
     // One config read serves both the type check and the author fallback.
@@ -386,6 +412,17 @@ fn show_comments(session: &str, repo: &Path, out: &mut impl Write) -> Result<()>
     Ok(())
 }
 
+/// The forge repository and pull number behind a `local:` PR slug, or
+/// `None` for any other session argument.
+fn parse_local_pr_slug(session: &str) -> Option<(ForgeRepository, u64)> {
+    match session.parse::<Slug>() {
+        Ok(Slug::Pr(pr)) if pr.forge == ForgeKind::Local => {
+            Some((ForgeRepository::local(pr.owner, pr.repo), pr.number))
+        }
+        _ => None,
+    }
+}
+
 /// Resolve a `local:` PR slug into the forge repository and PR number that
 /// back its thread store. Forge threads only exist for local pull requests
 /// today; other slugs are rejected with a pointer at the supported shape.
@@ -405,6 +442,82 @@ fn local_pr_target(session: &str) -> Result<(ForgeRepository, u64)> {
     }
     let repository = ForgeRepository::local(pr.owner, pr.repo);
     Ok((repository, pr.number))
+}
+
+/// The line a comment target anchors a thread to; `None` for review- and
+/// file-level targets, which stay session drafts.
+fn thread_anchor(target: &CommentTarget) -> Option<(PathBuf, u32, LineSide)> {
+    match target {
+        CommentTarget::Line { path, line, side } => Some((path.clone(), *line, *side)),
+        CommentTarget::LineRange { path, range, side } => Some((path.clone(), range.end, *side)),
+        CommentTarget::Review | CommentTarget::File { .. } => None,
+    }
+}
+
+struct LocalThreadInput<'a> {
+    path: PathBuf,
+    line: u32,
+    side: LineSide,
+    comment_type: &'a str,
+    content: &'a str,
+    username: Option<String>,
+}
+
+/// Open a thread on a local pull request straight in the forge store. The
+/// checkout in `repo` supplies the diff the anchor is snapshotted against,
+/// so it must be the repository the slug names.
+fn add_local_thread(
+    session: &str,
+    repo: &Path,
+    repository: ForgeRepository,
+    number: u64,
+    input: LocalThreadInput<'_>,
+) -> Result<LocalThread> {
+    if !repo.is_dir() {
+        return Err(TuicrError::InvalidInput(format!(
+            "creating a thread on a local pull request needs the checkout path in --repo (got '{}')",
+            repo.display()
+        )));
+    }
+    let checkout_repository = local_repository(repo)?;
+    if checkout_repository != repository {
+        return Err(TuicrError::InvalidInput(format!(
+            "'{session}' belongs to {}, but --repo {} is a checkout of {}; run from that repository or pass its path in --repo",
+            repository.display_name(),
+            repo.display(),
+            checkout_repository.display_name()
+        )));
+    }
+    let checkout = repo.canonicalize()?;
+    let backend = LocalForgeBackend::new(repository.clone(), Some(checkout));
+    let details = backend.get_pull_request(PullRequestTarget::with_repository(
+        repository,
+        number,
+        number.to_string(),
+    ))?;
+    let forge_config = config::load_config()
+        .ok()
+        .and_then(|outcome| outcome.config)
+        .and_then(|config| config.forge)
+        .unwrap_or_default();
+    let body = format!(
+        "{}{}",
+        comment_type_prefix(&CommentType::from_id(input.comment_type), &forge_config),
+        input.content
+    );
+    let author = resolve_cli_author(input.username);
+    backend.create_local_thread(
+        &details,
+        &CreateThreadRequest {
+            path: &input.path,
+            line: input.line,
+            side: GhSide::from(input.side),
+            body: &body,
+            author: Some(&author),
+            commit_id: &details.head_sha,
+            diff_start_sha: None,
+        },
+    )
 }
 
 fn list_threads(session: &str, out: &mut impl Write) -> Result<()> {
@@ -761,7 +874,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             is_resolved: false,
             resolved_at: None,
-            review_id: 0,
+            review_id: None,
             comments: Vec::new(),
         };
         store
@@ -778,6 +891,258 @@ mod tests {
         assert!(threads[0].is_resolved);
         assert_eq!(threads[0].comments.len(), 1);
         assert_eq!(threads[0].comments[0].body, "Done in abc1234.");
+    }
+
+    struct ReviewsDirGuard;
+
+    impl Drop for ReviewsDirGuard {
+        fn drop(&mut self) {
+            crate::persistence::storage::set_test_reviews_dir(None);
+        }
+    }
+
+    /// A checkout with `develop` and a one-commit `feature` branch, plus a
+    /// data directory under the same temp dir where `feature` is pull #1.
+    fn local_pull_fixture() -> (tempfile::TempDir, PathBuf, ReviewsDirGuard) {
+        let temp = tempdir().unwrap();
+        crate::persistence::storage::set_test_reviews_dir(Some(temp.path().join("data/reviews")));
+        let checkout = temp.path().join("repo");
+        init_checkout(&checkout, "https://github.com/owner/project.git");
+        crate::forge::local::target::resolve_local_target(&checkout, Some("feature"), None)
+            .unwrap();
+        (temp, checkout, ReviewsDirGuard)
+    }
+
+    fn init_checkout(checkout: &Path, origin: &str) {
+        fs::create_dir_all(checkout).unwrap();
+        let repository = git2::Repository::init(checkout).unwrap();
+        repository.remote("origin", origin).unwrap();
+        let base = commit(&repository, "develop", "alpha\nbeta\n", "base");
+        repository
+            .reference("refs/heads/feature", base, true, "test")
+            .unwrap();
+        commit(&repository, "feature", "alpha\nbeta changed\n", "feature");
+        repository.set_head("refs/heads/feature").unwrap();
+        repository
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+    }
+
+    fn commit(
+        repository: &git2::Repository,
+        branch: &str,
+        content: &str,
+        message: &str,
+    ) -> git2::Oid {
+        fs::write(repository.workdir().unwrap().join("file.txt"), content).unwrap();
+        let mut index = repository.index().unwrap();
+        index
+            .add_all(["file.txt"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Test User", "test@example.com").unwrap();
+        let reference = format!("refs/heads/{branch}");
+        let parents = repository
+            .find_reference(&reference)
+            .ok()
+            .and_then(|reference| reference.target())
+            .map(|oid| repository.find_commit(oid).unwrap())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let parent_refs = parents.iter().collect::<Vec<_>>();
+        repository
+            .commit(
+                Some(&reference),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parent_refs,
+            )
+            .unwrap()
+    }
+
+    fn add_command(
+        session: &str,
+        repo: &Path,
+        file: Option<&str>,
+        line: Option<u32>,
+        username: Option<&str>,
+    ) -> ReviewCommand {
+        ReviewCommand::Add {
+            session: session.to_string(),
+            input: None,
+            repo: repo.to_path_buf(),
+            comment_type: "issue".to_string(),
+            file: file.map(PathBuf::from),
+            line,
+            end_line: None,
+            side: LineSideArg::New,
+            username: username.map(str::to_string),
+            content: Some("direct".to_string()),
+        }
+    }
+
+    fn local_threads(temp: &tempfile::TempDir) -> Vec<LocalThread> {
+        LocalForgeStore::at(temp.path().join("data/local-forge/owner__project"))
+            .threads(1)
+            .unwrap()
+    }
+
+    #[test]
+    fn should_create_local_thread_from_add_on_local_pr_slug() {
+        let (temp, checkout, _guard) = local_pull_fixture();
+        let mut out = Vec::new();
+
+        run_with_writer(
+            add_command(
+                "local:owner/project/pr/1",
+                &checkout,
+                Some("file.txt"),
+                Some(2),
+                Some("Claude Fable"),
+            ),
+            &mut out,
+        )
+        .unwrap();
+
+        let printed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(printed["comments"][0]["author"], "Claude Fable");
+        let body = printed["comments"][0]["body"].as_str().unwrap();
+        assert!(body.ends_with("direct"), "body: {body}");
+        assert_eq!(printed["line_text"], "beta changed");
+        assert_eq!(printed["side"], "RIGHT");
+        assert_eq!(printed["original_line"], 2);
+        assert!(printed["review_id"].is_null());
+        let threads = local_threads(&temp);
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, printed["id"].as_str().unwrap());
+        let store = LocalForgeStore::at(temp.path().join("data/local-forge/owner__project"));
+        assert!(store.reviews(1).unwrap().is_empty());
+        let sessions = temp.path().join("data/reviews/sessions");
+        assert!(!sessions.exists() || fs::read_dir(&sessions).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn should_create_local_thread_from_json_input_target() {
+        let (temp, checkout, _guard) = local_pull_fixture();
+        let mut command = add_command(
+            "local:owner/project/pr/1",
+            &checkout,
+            None,
+            None,
+            Some("Claude Fable"),
+        );
+        if let ReviewCommand::Add { input, content, .. } = &mut command {
+            *input = Some(
+                r#"{"file":"file.txt","start_line":1,"end_line":2,"side":"new","content":"ranged"}"#
+                    .to_string(),
+            );
+            *content = None;
+        }
+        let mut out = Vec::new();
+
+        run_with_writer(command, &mut out).unwrap();
+
+        let printed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(printed["original_line"], 2);
+        assert!(
+            printed["comments"][0]["body"]
+                .as_str()
+                .unwrap()
+                .ends_with("ranged")
+        );
+        assert_eq!(local_threads(&temp).len(), 1);
+    }
+
+    #[test]
+    fn should_reject_thread_creation_when_repo_is_not_a_checkout() {
+        let (temp, _checkout, _guard) = local_pull_fixture();
+        let mut out = Vec::new();
+
+        let error = run_with_writer(
+            add_command(
+                "local:owner/project/pr/1",
+                Path::new("owner/project"),
+                Some("file.txt"),
+                Some(2),
+                None,
+            ),
+            &mut out,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, TuicrError::InvalidInput(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("needs the checkout path in --repo")
+        );
+        assert!(local_threads(&temp).is_empty());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn should_reject_thread_creation_when_checkout_does_not_match_slug() {
+        let (temp, _checkout, _guard) = local_pull_fixture();
+        let other = temp.path().join("other");
+        init_checkout(&other, "https://github.com/other/thing.git");
+        let mut out = Vec::new();
+
+        let error = run_with_writer(
+            add_command(
+                "local:owner/project/pr/1",
+                &other,
+                Some("file.txt"),
+                Some(2),
+                None,
+            ),
+            &mut out,
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(matches!(error, TuicrError::InvalidInput(_)));
+        assert!(message.contains("belongs to owner/project"), "{message}");
+        assert!(message.contains("other/thing"), "{message}");
+        assert!(local_threads(&temp).is_empty());
+    }
+
+    #[test]
+    fn should_keep_drafting_review_level_add_on_local_pr_slug() {
+        let (temp, checkout, _guard) = local_pull_fixture();
+        let mut out = Vec::new();
+
+        let error = run_with_writer(
+            add_command("local:owner/project/pr/1", &checkout, None, None, None),
+            &mut out,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("no PR session found"));
+        assert!(local_threads(&temp).is_empty());
+    }
+
+    #[test]
+    fn should_keep_drafting_line_add_on_github_slug() {
+        let (temp, checkout, _guard) = local_pull_fixture();
+        let mut out = Vec::new();
+
+        let error = run_with_writer(
+            add_command(
+                "gh:owner/project/pr/1",
+                &checkout,
+                Some("file.txt"),
+                Some(2),
+                None,
+            ),
+            &mut out,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("no PR session found"));
+        assert!(local_threads(&temp).is_empty());
     }
 
     fn test_session(repo_path: PathBuf) -> ReviewSession {

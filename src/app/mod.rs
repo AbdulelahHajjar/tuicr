@@ -1815,6 +1815,7 @@ mod diff_load;
 mod file_filter;
 mod gaps;
 mod init;
+mod local_threads;
 mod modes;
 mod navigation;
 mod pr;

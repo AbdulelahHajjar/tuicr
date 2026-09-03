@@ -39,7 +39,9 @@ here follows the conventions of the existing forge modules (see `AGENTS.md`,
   `owner = "local"`, `name` = the checkout's directory name.
 - **Author** — the reviewer's display name: `git config user.name` of the
   checkout, else `$USER`, else `you`. Used as comment/review author and as
-  `viewer_login` for since-last-review scoping.
+  `viewer_login` for since-last-review scoping. Threads opened directly (see
+  *Direct-to-thread comments*) name their own author instead: the TUI's
+  configured `username`, or the CLI's `--username`.
 
 ## Identity and persistence surfaces
 
@@ -123,6 +125,8 @@ over a directory rather than duplicated. Every file carries `"version": 1`.
 
 Review ids are numeric (`GhCreateReviewResponse.id` is `u64`); thread and
 comment ids are UUID strings (`RemoteReviewThread.id` is an opaque string).
+`review_id` is `null` for threads opened directly, outside any review; nothing
+reads it back.
 
 ## `LocalForgeBackend` — `ForgeBackend` method by method
 
@@ -149,6 +153,7 @@ a network. The checkout is the source of truth.
 | `local_checkout_path()` | `Some(checkout)`. |
 | `create_review(pr, request)` | Allocate a review id; store the review (`Draft` → `PENDING`, others → their GitHub event name; `commit_id = request.commit_id`; `body`). For each `InlineComment`, create one thread anchored at `(path, line, side)` with `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` = content of that diff line (looked up in the `start..end` patch the comment was mapped against; empty string when it cannot be found), one root comment (`body`, Author, `review_id`). Any event reuses the Author's outstanding `PENDING` review: another Draft updates its non-empty body and attaches new threads; a non-Draft submits that same review in place. Only when no pending review exists is a new review allocated. The range the inline comments were mapped against arrives as `CreateReviewRequest::diff_start_sha` (the parent SHA the displayed diff starts at, `None` for the full pull request); `line_text` is looked up in the `<that start>..<request.commit_id>` patch. Return `GhCreateReviewResponse { id, html_url, state }` where `state` is `PENDING`/`COMMENTED`/`APPROVED`/`CHANGES_REQUESTED`. |
 | `resolve_thread(pr, thread_id, resolved)` — **new trait method** | Set `is_resolved`/`resolved_at` on the thread and persist. Default implementation on the trait: `Err(TuicrError::UnsupportedOperation("Resolving review threads is not supported on <Forge>"))`; no other backend implements it in this version. |
+| `create_thread(pr, request)` — **new trait method** | Open one thread at `(path, line, side)` outside any review: `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` looked up in the `<diff_start_sha or base>..<commit_id>` patch exactly as `create_review` does, `review_id = null`, one root comment authored by `request.author` (falling back to Author). The path must be part of that diff (error otherwise); a line outside it stores an empty `line_text`. A closed pull is rejected. Returns the thread as a `RemoteReviewThread` anchored at `original_line`, not outdated. Default on the trait: `UnsupportedOperation`; only Local implements it. The inherent `create_local_thread` returns the stored record for the CLI. |
 
 ### Anchoring (outdated detection)
 
@@ -245,6 +250,29 @@ status bar shows "Thread resolved" / "Thread reopened". An
 `UnsupportedOperation` error is shown verbatim. The call is synchronous
 (local file I/O; the only implementation in this version).
 
+## Direct-to-thread comments
+
+The Local review flow is draft-free for inline comments. A new line or range
+comment saved in the TUI on an open Local pull request goes straight to
+`threads.json` through `ForgeBackend::create_thread`, authored as the
+configured `username`, and appears in the diff and the comment navigator at
+once. No session draft is written and no `:submit` is needed for it. The
+anchor is the displayed diff: with the inline commit selector on a strict
+subset, `commit_id` is the subset's newest commit and `diff_start_sha` its
+parent, exactly as `:submit` maps drafts. A range comment anchors at its last
+line. If the write fails, the error is shown and the comment box stays open
+with its text; nothing falls back to a draft.
+
+File-level and review-level comments, edits of existing drafts, and comments
+on a closed pull keep the session-draft path; the verdict `:submit` folds them
+into the review body as before. `:summary`, `:clear`, and `:clearc` act on
+drafts only. `:submit approve` / `request-changes` / `comment` remain the way
+to record a verdict.
+
+The CLI mirrors this: `tuicr review add --session local:… --target-file <path>
+--line <n>` opens a thread (see `docs/REVIEW_CLI.md`). `--repo` must point at
+the checkout so `line_text` can be snapshotted against the pull request diff.
+
 ## Fork build markers
 
 - `tuicr --version` prints `tuicr <cargo version>+local-forge` (build metadata
@@ -279,4 +307,7 @@ coverage (not exhaustive):
 - `:resolve`/`:unresolve` parse + app behaviour with a fake backend (navigator selection, cursor on thread row, cursor on anchored line, nothing at cursor, unsupported forge)
 - auto-follow tick: moved head → reload spawned once; no double spawn while in flight; disabled at `0`
 - `tuicr review list --repo <checkout>` lists a local PR session; `--session local:…` resolves
+- direct threads: store `add_thread` keeps `review_id` null and older numeric files still load; backend `create_thread` snapshots `line_text` (full diff and commit subset), stamps the requested author, rejects a closed pull and a path outside the diff
+- TUI save on a Local pull request: line and range comments call `create_thread` with the displayed diff's SHAs and leave no draft; file-level, GitHub, and closed-pull saves still draft; a failed write keeps the comment box open
+- `tuicr review add` on a `local:` slug with a line target writes a thread (flags and `--input`), rejects a non-checkout `--repo` and a checkout of another repository, and still drafts for review-level targets and other forges
 - regression: every existing test still passes; GitHub target parsing unchanged

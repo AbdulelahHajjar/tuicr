@@ -233,6 +233,15 @@ fn build_inline_body(comment: &Comment, file_level: bool, ctx: SubmitContext<'_>
     format!("{prefix}{body}", body = comment.content)
 }
 
+/// The `[TYPE] ` tag that precedes a comment body when `ForgeConfig`
+/// enables it. Empty for untyped comments or when the prefix is disabled.
+pub(crate) fn comment_type_prefix(comment_type: &CommentType, config: &ForgeConfig) -> String {
+    if !config.comment_type_prefix || comment_type.is_none() {
+        return String::new();
+    }
+    format!("[{ty}] ", ty = comment_type.as_str())
+}
+
 /// Where a local comment is anchored. The caller knows this from how it
 /// walked the session (`file_comments` vs `line_comments[key]`); supplying
 /// it explicitly avoids inferring file-level-ness from missing fields on

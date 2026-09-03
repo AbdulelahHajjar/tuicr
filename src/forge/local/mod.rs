@@ -15,12 +15,12 @@ use crate::forge::remote_comments::{
 };
 use crate::forge::submit::GhSide;
 use crate::forge::traits::{
-    CreateReviewRequest, ForgeBackend, ForgeFileLinesRequest, ForgeRepository,
+    CreateReviewRequest, CreateThreadRequest, ForgeBackend, ForgeFileLinesRequest, ForgeRepository,
     GhCreateReviewResponse, PagedPullRequests, PullRequestCommit, PullRequestDetails,
     PullRequestHeadStatus, PullRequestInfo, PullRequestListQuery, PullRequestReviewMetadata,
     PullRequestReviewRecord, PullRequestReviewStatus, PullRequestSummary, PullRequestTarget,
 };
-use crate::model::{DiffLine, FilePatch};
+use crate::model::{DiffFile, DiffLine, FilePatch};
 use crate::syntax::SyntaxHighlighter;
 use crate::vcs::diff_parser::parse_file_patches;
 use crate::vcs::git::raw::run_git_diff;
@@ -169,12 +169,116 @@ impl LocalForgeBackend {
         Ok(String::from_utf8_lossy(blob.content()).into_owned())
     }
 
-    fn parsed_diff(&self, patches: Vec<FilePatch>) -> Result<Vec<crate::model::DiffFile>> {
+    fn parsed_diff(&self, patches: Vec<FilePatch>) -> Result<Vec<DiffFile>> {
         match parse_file_patches(patches, &SyntaxHighlighter::default()) {
             Ok(files) => Ok(files),
             Err(TuicrError::NoChanges) => Ok(Vec::new()),
             Err(error) => Err(error),
         }
+    }
+
+    /// The diff a comment anchor was mapped against: the displayed commit
+    /// subset when `diff_start_sha` is set, otherwise the full pull request.
+    fn anchor_diff(
+        &self,
+        pr: &PullRequestDetails,
+        diff_start_sha: Option<&str>,
+        commit_id: &str,
+    ) -> Result<Vec<DiffFile>> {
+        let range = format!("{}..{}", diff_start_sha.unwrap_or(&pr.base_sha), commit_id);
+        self.parsed_diff(run_git_diff(self.checkout()?, &[&range])?)
+    }
+
+    fn new_thread(
+        files: &[DiffFile],
+        request: &CreateThreadRequest<'_>,
+        base_sha: &str,
+        author: &str,
+        now: DateTime<Utc>,
+    ) -> LocalThread {
+        let side = match request.side {
+            GhSide::Right => RemoteCommentSide::Right,
+            GhSide::Left => RemoteCommentSide::Left,
+        };
+        LocalThread {
+            id: uuid::Uuid::new_v4().to_string(),
+            path: request.path.to_string_lossy().replace('\\', "/"),
+            side: request.side.as_str().to_string(),
+            original_line: request.line,
+            original_commit: request.commit_id.to_string(),
+            base_commit: base_sha.to_string(),
+            line_text: anchor::line_text(files, request.path, side, request.line)
+                .unwrap_or_default(),
+            created_at: now,
+            is_resolved: false,
+            resolved_at: None,
+            review_id: None,
+            comments: vec![LocalThreadComment {
+                id: uuid::Uuid::new_v4().to_string(),
+                author: author.to_string(),
+                body: request.body.to_string(),
+                created_at: now,
+            }],
+        }
+    }
+
+    fn remote_thread(
+        &self,
+        number: u64,
+        thread: LocalThread,
+        line: Option<u32>,
+        is_outdated: bool,
+    ) -> RemoteReviewThread {
+        let root_id = thread.comments.first().map(|comment| comment.id.clone());
+        let comments = thread
+            .comments
+            .into_iter()
+            .enumerate()
+            .map(|(index, comment)| RemoteReviewComment {
+                url: format!("{}#comment-{}", self.pull_url(number), comment.id),
+                id: comment.id,
+                author: Some(comment.author),
+                body: comment.body,
+                created_at: Some(comment.created_at),
+                in_reply_to: (index > 0).then(|| root_id.clone()).flatten(),
+            })
+            .collect();
+        RemoteReviewThread {
+            id: thread.id,
+            path: thread.path,
+            line,
+            side: RemoteCommentSide::parse(&thread.side),
+            is_resolved: thread.is_resolved,
+            is_outdated,
+            comments,
+        }
+    }
+
+    /// Open a thread that belongs to no review and return the stored record.
+    pub(crate) fn create_local_thread(
+        &self,
+        pr: &PullRequestDetails,
+        request: &CreateThreadRequest<'_>,
+    ) -> Result<LocalThread> {
+        if pr.is_read_only() {
+            return Err(TuicrError::Forge(
+                "Cannot comment on a closed local pull request".to_string(),
+            ));
+        }
+        let files = self.anchor_diff(pr, request.diff_start_sha, request.commit_id)?;
+        if !files.iter().any(|file| file.display_path() == request.path) {
+            return Err(TuicrError::Forge(format!(
+                "`{}` is not part of the pull request diff",
+                request.path.display()
+            )));
+        }
+        let author = match request.author {
+            Some(author) => author.to_string(),
+            None => self.author()?,
+        };
+        let thread = Self::new_thread(&files, request, &pr.base_sha, &author, Utc::now());
+        self.store()?.add_thread(pr.number, thread.clone())?;
+        Ok(thread)
     }
 }
 
@@ -307,29 +411,7 @@ impl ForgeBackend for LocalForgeBackend {
             .into_iter()
             .map(|thread| {
                 let (line, is_outdated) = anchor::reanchor(&thread, &pr.head_sha, &files);
-                let root_id = thread.comments.first().map(|comment| comment.id.clone());
-                let comments = thread
-                    .comments
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, comment)| RemoteReviewComment {
-                        url: format!("{}#comment-{}", self.pull_url(pr.number), comment.id),
-                        id: comment.id,
-                        author: Some(comment.author),
-                        body: comment.body,
-                        created_at: Some(comment.created_at),
-                        in_reply_to: (index > 0).then(|| root_id.clone()).flatten(),
-                    })
-                    .collect();
-                RemoteReviewThread {
-                    id: thread.id,
-                    path: thread.path,
-                    line,
-                    side: RemoteCommentSide::parse(&thread.side),
-                    is_resolved: thread.is_resolved,
-                    is_outdated,
-                    comments,
-                }
+                self.remote_thread(pr.number, thread, line, is_outdated)
             })
             .collect())
     }
@@ -404,43 +486,28 @@ impl ForgeBackend for LocalForgeBackend {
                 "Cannot review a closed local pull request".to_string(),
             ));
         }
-        let range = format!(
-            "{}..{}",
-            request.diff_start_sha.unwrap_or(&pr.base_sha),
-            request.commit_id
-        );
-        let files = self.parsed_diff(run_git_diff(self.checkout()?, &[&range])?)?;
+        let files = self.anchor_diff(pr, request.diff_start_sha, request.commit_id)?;
         let author = self.author()?;
         let now = Utc::now();
         let threads = request
             .comments
             .iter()
             .map(|comment| {
-                let side = match comment.side {
-                    GhSide::Right => RemoteCommentSide::Right,
-                    GhSide::Left => RemoteCommentSide::Left,
-                };
-                let thread_id = uuid::Uuid::new_v4().to_string();
-                LocalThread {
-                    id: thread_id,
-                    path: comment.path.to_string_lossy().replace('\\', "/"),
-                    side: comment.side.as_str().to_string(),
-                    original_line: comment.line,
-                    original_commit: request.commit_id.to_string(),
-                    base_commit: pr.base_sha.clone(),
-                    line_text: anchor::line_text(&files, &comment.path, side, comment.line)
-                        .unwrap_or_default(),
-                    created_at: now,
-                    is_resolved: false,
-                    resolved_at: None,
-                    review_id: 0,
-                    comments: vec![LocalThreadComment {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        author: author.clone(),
-                        body: comment.body.clone(),
-                        created_at: now,
-                    }],
-                }
+                Self::new_thread(
+                    &files,
+                    &CreateThreadRequest {
+                        path: &comment.path,
+                        line: comment.line,
+                        side: comment.side,
+                        body: &comment.body,
+                        author: None,
+                        commit_id: request.commit_id,
+                        diff_start_sha: request.diff_start_sha,
+                    },
+                    &pr.base_sha,
+                    &author,
+                    now,
+                )
             })
             .collect();
         let event = request.event.github_event().unwrap_or("PENDING");
@@ -471,6 +538,16 @@ impl ForgeBackend for LocalForgeBackend {
             ));
         }
         self.store()?.resolve_thread(pr.number, thread_id, resolved)
+    }
+
+    fn create_thread(
+        &self,
+        pr: &PullRequestDetails,
+        request: CreateThreadRequest<'_>,
+    ) -> Result<RemoteReviewThread> {
+        let thread = self.create_local_thread(pr, &request)?;
+        let line = Some(thread.original_line);
+        Ok(self.remote_thread(pr.number, thread, line, false))
     }
 }
 
@@ -915,7 +992,7 @@ mod tests {
         assert_eq!(changes.state, "CHANGES_REQUESTED");
         assert_eq!(reviews[0].event, "COMMENT");
         assert_eq!(stored_threads[0].line_text, "beta changed");
-        assert_eq!(stored_threads[0].review_id, draft.id);
+        assert_eq!(stored_threads[0].review_id, Some(draft.id));
 
         let metadata = fixture
             .backend
@@ -972,6 +1049,177 @@ mod tests {
         let threads = fixture.store.threads(fixture.pull_number).unwrap();
         assert_eq!(threads[0].line_text, "beta changed");
         assert_eq!(threads[0].base_commit, fixture.base.to_string());
+    }
+
+    fn thread_request<'a>(
+        path: &'a Path,
+        line: u32,
+        side: GhSide,
+        author: Option<&'a str>,
+        commit_id: &'a str,
+        diff_start_sha: Option<&'a str>,
+    ) -> CreateThreadRequest<'a> {
+        CreateThreadRequest {
+            path,
+            line,
+            side,
+            body: "[ISSUE] direct",
+            author,
+            commit_id,
+            diff_start_sha,
+        }
+    }
+
+    #[test]
+    fn should_create_thread_with_line_text_author_and_no_review() {
+        let fixture = Fixture::new();
+        let details = fixture.details();
+        let path = PathBuf::from("file.txt");
+
+        let created = fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(
+                    &path,
+                    2,
+                    GhSide::Right,
+                    Some("Claude Fable"),
+                    &details.head_sha,
+                    None,
+                ),
+            )
+            .unwrap();
+
+        let stored = fixture.store.threads(fixture.pull_number).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, created.id);
+        assert_eq!(stored[0].side, "RIGHT");
+        assert_eq!(stored[0].original_line, 2);
+        assert_eq!(stored[0].line_text, "beta changed");
+        assert_eq!(stored[0].original_commit, details.head_sha);
+        assert_eq!(stored[0].base_commit, details.base_sha);
+        assert_eq!(stored[0].review_id, None);
+        assert_eq!(stored[0].comments[0].author, "Claude Fable");
+        assert_eq!(stored[0].comments[0].body, "[ISSUE] direct");
+        assert!(
+            fixture
+                .store
+                .reviews(fixture.pull_number)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(created.line, Some(2));
+        assert!(!created.is_outdated);
+        assert_eq!(created.comments[0].author.as_deref(), Some("Claude Fable"));
+        let listed = fixture.backend.list_review_threads(&details).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+        assert_eq!(listed[0].line, Some(2));
+    }
+
+    #[test]
+    fn should_default_thread_author_to_backend_author() {
+        let fixture = Fixture::new();
+        let details = fixture.details();
+        let path = PathBuf::from("file.txt");
+
+        fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(&path, 2, GhSide::Right, None, &details.head_sha, None),
+            )
+            .unwrap();
+
+        let stored = fixture.store.threads(fixture.pull_number).unwrap();
+        assert_eq!(stored[0].comments[0].author, "Test User");
+    }
+
+    #[test]
+    fn should_snapshot_thread_text_from_selected_commit_range() {
+        let fixture = Fixture::new();
+        let git = Repository::open(&fixture.checkout).unwrap();
+        let third = commit(&git, "feature", "alpha\nbeta final\ngamma\n", "third", 4);
+        let details = fixture.details();
+        let path = PathBuf::from("file.txt");
+        let diff_start_sha = fixture.second.to_string();
+        let commit_id = third.to_string();
+
+        fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(
+                    &path,
+                    2,
+                    GhSide::Left,
+                    None,
+                    &commit_id,
+                    Some(&diff_start_sha),
+                ),
+            )
+            .unwrap();
+
+        let stored = fixture.store.threads(fixture.pull_number).unwrap();
+        assert_eq!(stored[0].line_text, "beta changed");
+        assert_eq!(stored[0].original_commit, commit_id);
+        assert_eq!(stored[0].base_commit, fixture.base.to_string());
+    }
+
+    #[test]
+    fn should_reject_creating_thread_on_closed_pull() {
+        let fixture = Fixture::new();
+        let mut details = fixture.details();
+        details.closed = true;
+        let path = PathBuf::from("file.txt");
+
+        let error = fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(&path, 2, GhSide::Right, None, &details.head_sha, None),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Cannot comment on a closed local pull request"
+        );
+        assert!(
+            fixture
+                .store
+                .threads(fixture.pull_number)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn should_reject_thread_on_path_outside_diff() {
+        let fixture = Fixture::new();
+        let details = fixture.details();
+        let path = PathBuf::from("missing.txt");
+
+        let error = fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(&path, 1, GhSide::Right, None, &details.head_sha, None),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "`missing.txt` is not part of the pull request diff"
+        );
+        assert!(
+            fixture
+                .store
+                .threads(fixture.pull_number)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

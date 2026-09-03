@@ -233,7 +233,9 @@ pub enum ReviewCommand {
         all: bool,
     },
 
-    /// Add a local draft comment to a persisted session.
+    /// Add a comment to a persisted session. On a `local:` pull request a
+    /// line or range target opens a forge thread directly and prints it;
+    /// everything else becomes a local draft comment.
     Add {
         /// Session slug from `tuicr review list` (local or PR), or path to a
         /// session JSON file.
@@ -245,7 +247,8 @@ pub enum ReviewCommand {
         input: Option<String>,
 
         /// Repo selector used to resolve a local session slug (path or
-        /// `owner/repo`). PR slugs and JSON paths resolve without it.
+        /// `owner/repo`). PR slugs and JSON paths resolve without it, except
+        /// that a thread on a `local:` pull request needs its checkout path.
         #[arg(long, value_name = "PATH|OWNER/REPO", default_value = ".")]
         repo: PathBuf,
 
@@ -272,9 +275,9 @@ pub enum ReviewCommand {
         #[arg(long, value_enum, default_value_t = LineSideArg::New)]
         side: LineSideArg,
 
-        /// Author stamped on the new comment. Pass an explicit value when
-        /// invoking from an agent (e.g. `--username "Claude Opus 4.7"`) so
-        /// human and agent comments are visually distinguished in the TUI.
+        /// Author stamped on the new comment or thread. Pass an explicit
+        /// value when invoking from an agent (e.g. `--username "Claude Fable"`)
+        /// so human and agent comments are visually distinguished in the TUI.
         /// Falls back to the config `username` setting, then to `"user"`.
         #[arg(long, value_name = "NAME")]
         username: Option<String>,

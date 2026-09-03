@@ -68,7 +68,9 @@ tuicr review list --repo git@ssh.dev.azure.com:v3/myorg/myproject/myrepo
 ```
 
 `--repo` for `add` / `comments` is only consulted when resolving a *local*
-slug; PR slugs and JSON paths ignore it.
+slug; PR slugs and JSON paths ignore it. The one exception is a thread on a
+`local:` pull request, where `--repo` must be that repository's checkout (see
+[Forge Threads](#forge-threads-local-pull-requests)).
 
 ## Add Comments
 
@@ -92,6 +94,10 @@ Target flags:
 - use `--side old|new` for inline comments
 - use `--username <name>` to identify the comment author; otherwise tuicr uses
   the configured `username` or `"user"`
+
+On a `local:` pull request slug, a line or range target opens a forge thread
+instead of a draft (see [Forge Threads](#forge-threads-local-pull-requests));
+review- and file-level targets still become drafts.
 
 ## JSON Input
 
@@ -224,3 +230,20 @@ tuicr review resolve --session local:owner/repo/pr/1 --thread <id> --unresolve
 comments. `reply` appends a comment to a thread and prints it. `resolve`
 flips `is_resolved` (`--unresolve` reopens). All three accept only `local:`
 PR slugs; other forges return an error.
+
+New threads come from `add`:
+
+```bash
+tuicr review add --session local:owner/repo/pr/1 --repo /path/to/checkout \
+  --target-file src/main.rs --line 42 --side new --type issue \
+  --username "Claude Fable" "Handle the empty case here."
+```
+
+With a line or range target on a `local:` slug, `add` opens a thread anchored
+at that line (a range anchors at its last line) and prints it in the same
+shape as a `threads` element, so `.id` is the thread id. It needs the checkout
+in `--repo` (default `.`) to snapshot the line's text against the pull request
+diff: a `--repo` that is not a directory, or a checkout of a different
+repository, is an error, and the file must be part of the diff. Threads
+created this way have `"review_id": null`; threads created by `:submit` carry
+their review's id. No session file is touched.

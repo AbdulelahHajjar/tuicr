@@ -2714,6 +2714,18 @@ use crate::forge::remote_comments::{
 };
 
 type ResolveCalls = std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>;
+type CreateCalls = std::rc::Rc<std::cell::RefCell<Vec<CreatedThreadCall>>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CreatedThreadCall {
+    path: String,
+    line: u32,
+    side: crate::forge::submit::GhSide,
+    body: String,
+    author: Option<String>,
+    commit_id: String,
+    diff_start_sha: Option<String>,
+}
 
 struct ThreadAwareForgeBackend {
     details: crate::forge::traits::PullRequestDetails,
@@ -2722,6 +2734,8 @@ struct ThreadAwareForgeBackend {
     calls: std::cell::Cell<u32>,
     resolve_calls: ResolveCalls,
     supports_resolve: bool,
+    create_calls: CreateCalls,
+    create_error: Option<String>,
 }
 
 impl ThreadAwareForgeBackend {
@@ -2737,7 +2751,27 @@ impl ThreadAwareForgeBackend {
             calls: std::cell::Cell::new(0),
             resolve_calls: Default::default(),
             supports_resolve: false,
+            create_calls: Default::default(),
+            create_error: None,
         }
+    }
+
+    /// A backend that records `create_thread` calls and answers each with a
+    /// fresh thread anchored where the request asked.
+    fn threading(
+        details: crate::forge::traits::PullRequestDetails,
+        patch: String,
+        threads: Vec<RemoteReviewThread>,
+    ) -> (Self, CreateCalls) {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut backend = Self::new(details, patch, threads);
+        backend.create_calls = calls.clone();
+        (backend, calls)
+    }
+
+    fn failing_create(mut self, message: &str) -> Self {
+        self.create_error = Some(message.to_string());
+        self
     }
 
     fn resolving(
@@ -2754,6 +2788,8 @@ impl ThreadAwareForgeBackend {
                 calls: std::cell::Cell::new(0),
                 resolve_calls: calls.clone(),
                 supports_resolve: true,
+                create_calls: Default::default(),
+                create_error: None,
             },
             calls,
         )
@@ -2830,6 +2866,46 @@ impl crate::forge::traits::ForgeBackend for ThreadAwareForgeBackend {
             .borrow_mut()
             .push((thread_id.to_string(), resolved));
         Ok(())
+    }
+
+    fn create_thread(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+        request: crate::forge::traits::CreateThreadRequest<'_>,
+    ) -> Result<RemoteReviewThread> {
+        if let Some(message) = &self.create_error {
+            return Err(TuicrError::Forge(message.clone()));
+        }
+        let mut calls = self.create_calls.borrow_mut();
+        let id = format!("new-{}", calls.len() + 1);
+        calls.push(CreatedThreadCall {
+            path: request.path.to_string_lossy().into_owned(),
+            line: request.line,
+            side: request.side,
+            body: request.body.to_string(),
+            author: request.author.map(str::to_string),
+            commit_id: request.commit_id.to_string(),
+            diff_start_sha: request.diff_start_sha.map(str::to_string),
+        });
+        Ok(RemoteReviewThread {
+            id: id.clone(),
+            path: request.path.to_string_lossy().into_owned(),
+            line: Some(request.line),
+            side: match request.side {
+                crate::forge::submit::GhSide::Right => RemoteCommentSide::Right,
+                crate::forge::submit::GhSide::Left => RemoteCommentSide::Left,
+            },
+            is_resolved: false,
+            is_outdated: false,
+            comments: vec![RemoteReviewComment {
+                id: format!("{id}-root"),
+                author: request.author.map(str::to_string),
+                body: request.body.to_string(),
+                created_at: None,
+                in_reply_to: None,
+                url: format!("local:owner/project/pull/42#comment-{id}"),
+            }],
+        })
     }
 }
 
@@ -3028,6 +3104,211 @@ fn should_error_when_no_review_thread_is_at_cursor() {
     let error = app.resolve_review_thread_at_cursor(true).unwrap_err();
 
     assert_eq!(error.to_string(), "No review thread at cursor");
+}
+
+fn local_pr_details(number: u64, title: &str) -> crate::forge::traits::PullRequestDetails {
+    let mut details = test_pr_details(number, title);
+    details.repository = ForgeRepository::local("owner", "project");
+    details.url = format!("local:owner/project/pull/{number}");
+    details
+}
+
+fn local_sample_pr(number: u64, title: &str) -> PullRequestSummary {
+    let mut summary = sample_pr(number, title);
+    summary.repository = ForgeRepository::local("owner", "project");
+    summary.url = format!("local:owner/project/pull/{number}");
+    summary
+}
+
+fn threading_app(
+    summary: PullRequestSummary,
+    details: crate::forge::traits::PullRequestDetails,
+) -> (App, CreateCalls) {
+    let mut app = build_app();
+    let (backend, calls) = ThreadAwareForgeBackend::threading(
+        details,
+        crate::forge::github::gh::tests_fixture::SIMPLE_PATCH.to_string(),
+        vec![sample_thread(2, "remote", false, false)],
+    );
+    app.open_pr_with_backend(&summary, Box::new(backend), None)
+        .unwrap();
+    (app, calls)
+}
+
+fn threading_local_app() -> (App, CreateCalls) {
+    threading_app(
+        local_sample_pr(42, "answer"),
+        local_pr_details(42, "answer"),
+    )
+}
+
+/// Put the diff cursor on new line `line` of the single diff file so the
+/// comment save resolves a file path instead of the PR overview rows.
+fn move_cursor_to_new_line(app: &mut App, line: u32) {
+    app.diff_state.cursor_line = app
+        .line_annotations
+        .iter()
+        .position(|row| matches!(row, AnnotatedLine::DiffLine { new_lineno, .. } if *new_lineno == Some(line)))
+        .unwrap();
+}
+
+fn line_draft_count(app: &App) -> usize {
+    app.session
+        .files
+        .values()
+        .map(|file| file.line_comments.values().map(Vec::len).sum::<usize>())
+        .sum()
+}
+
+#[test]
+fn should_create_local_thread_when_saving_line_comment_on_local_pr() {
+    let (mut app, calls) = threading_local_app();
+    app.username = "Reviewer".to_string();
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(false, Some((2, LineSide::New)));
+    app.comment_type = crate::model::CommentType::from_id("issue");
+    app.comment_buffer = "note".to_string();
+
+    app.save_comment();
+
+    assert_eq!(
+        &*calls.borrow(),
+        &[CreatedThreadCall {
+            path: "src/lib.rs".to_string(),
+            line: 2,
+            side: crate::forge::submit::GhSide::Right,
+            body: "[ISSUE] note".to_string(),
+            author: Some("Reviewer".to_string()),
+            commit_id: "abcdef0123456789".to_string(),
+            diff_start_sha: None,
+        }]
+    );
+    assert_eq!(app.forge_review_threads.len(), 2);
+    assert_eq!(app.forge_review_threads[1].comments[0].body, "[ISSUE] note");
+    assert_eq!(line_draft_count(&app), 0);
+    assert!(!app.dirty);
+    assert_eq!(
+        app.message.as_ref().unwrap().content,
+        "Thread created on line 2"
+    );
+    assert_eq!(app.input_mode, InputMode::Normal);
+    assert!(
+        app.build_comment_navigator_items()
+            .iter()
+            .any(|item| matches!(item.key, CommentNavigatorKey::Remote { thread_idx: 1 }))
+    );
+}
+
+#[test]
+fn should_pass_subset_commit_and_diff_start_when_creating_local_thread() {
+    let (mut app, calls) = threading_local_app();
+    app.pr_commits = vec![
+        sample_pr_commit("newer", "newer"),
+        sample_pr_commit("older", "older"),
+    ];
+    app.commit_selection_range = Some((0, 0));
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(false, Some((2, LineSide::New)));
+    app.comment_buffer = "note".to_string();
+
+    app.save_comment();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].commit_id, "newer");
+    assert_eq!(calls[0].diff_start_sha.as_deref(), Some("older"));
+}
+
+#[test]
+fn should_create_local_thread_at_range_end_from_visual_selection() {
+    let (mut app, calls) = threading_local_app();
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(false, Some((2, LineSide::New)));
+    app.comment_line_range = Some((crate::model::LineRange::new(2, 3), LineSide::New));
+    app.comment_buffer = "ranged".to_string();
+
+    app.save_comment();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].line, 3);
+    assert_eq!(calls[0].body, "ranged");
+    assert_eq!(
+        app.message.as_ref().unwrap().content,
+        "Thread created on line 3"
+    );
+}
+
+#[test]
+fn should_keep_drafting_file_level_comments_on_local_pr() {
+    let (mut app, calls) = threading_local_app();
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(true, None);
+    app.comment_buffer = "file note".to_string();
+
+    app.save_comment();
+
+    assert!(calls.borrow().is_empty());
+    let file = app.session.files.get(Path::new("src/lib.rs")).unwrap();
+    assert_eq!(file.file_comments.len(), 1);
+    assert_eq!(app.forge_review_threads.len(), 1);
+}
+
+#[test]
+fn should_keep_drafting_line_comments_on_github_pr() {
+    let (mut app, calls) = threading_app(sample_pr(42, "answer"), test_pr_details(42, "answer"));
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(false, Some((2, LineSide::New)));
+    app.comment_buffer = "note".to_string();
+
+    app.save_comment();
+
+    assert!(calls.borrow().is_empty());
+    assert_eq!(line_draft_count(&app), 1);
+    assert_eq!(app.forge_review_threads.len(), 1);
+}
+
+#[test]
+fn should_keep_drafting_on_closed_local_pr() {
+    let mut details = local_pr_details(42, "answer");
+    details.closed = true;
+    details.state = "CLOSED".to_string();
+    let (mut app, calls) = threading_app(local_sample_pr(42, "answer"), details);
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(false, Some((2, LineSide::New)));
+    app.comment_buffer = "note".to_string();
+
+    app.save_comment();
+
+    assert!(calls.borrow().is_empty());
+    assert_eq!(line_draft_count(&app), 1);
+}
+
+#[test]
+fn should_keep_comment_text_when_local_thread_creation_fails() {
+    let mut app = build_app();
+    let backend = ThreadAwareForgeBackend::new(
+        local_pr_details(42, "answer"),
+        crate::forge::github::gh::tests_fixture::SIMPLE_PATCH.to_string(),
+        vec![sample_thread(2, "remote", false, false)],
+    )
+    .failing_create("disk full");
+    app.open_pr_with_backend(&local_sample_pr(42, "answer"), Box::new(backend), None)
+        .unwrap();
+    move_cursor_to_new_line(&mut app, 2);
+    app.enter_comment_mode(false, Some((2, LineSide::New)));
+    app.comment_buffer = "note".to_string();
+
+    app.save_comment();
+
+    assert_eq!(app.input_mode, InputMode::Comment);
+    assert_eq!(app.comment_buffer, "note");
+    assert_eq!(line_draft_count(&app), 0);
+    assert_eq!(app.forge_review_threads.len(), 1);
+    assert_eq!(
+        app.message.as_ref().unwrap().content,
+        "Could not create thread: disk full"
+    );
 }
 
 #[test]
