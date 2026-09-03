@@ -218,8 +218,18 @@ impl LocalForgeBackend {
                 author: author.to_string(),
                 body: request.body.to_string(),
                 created_at: now,
+                updated_at: None,
             }],
         }
+    }
+
+    fn writable(&self, pr: &PullRequestDetails) -> Result<()> {
+        if pr.is_read_only() {
+            return Err(TuicrError::Forge(
+                "Cannot update a closed local pull request".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     fn remote_thread(
@@ -532,12 +542,36 @@ impl ForgeBackend for LocalForgeBackend {
         thread_id: &str,
         resolved: bool,
     ) -> Result<()> {
-        if pr.is_read_only() {
-            return Err(TuicrError::Forge(
-                "Cannot update a closed local pull request".to_string(),
-            ));
-        }
+        self.writable(pr)?;
         self.store()?.resolve_thread(pr.number, thread_id, resolved)
+    }
+
+    fn update_thread_comment(
+        &self,
+        pr: &PullRequestDetails,
+        thread_id: &str,
+        comment_id: Option<&str>,
+        author: &str,
+        body: &str,
+    ) -> Result<()> {
+        self.writable(pr)?;
+        self.store()?
+            .update_thread_comment(pr.number, thread_id, comment_id, author, body)?;
+        Ok(())
+    }
+
+    fn delete_thread_comment(
+        &self,
+        pr: &PullRequestDetails,
+        thread_id: &str,
+        comment_id: Option<&str>,
+        author: &str,
+    ) -> Result<bool> {
+        self.writable(pr)?;
+        let (_, thread_deleted) = self
+            .store()?
+            .delete_thread_comment(pr.number, thread_id, comment_id, author)?;
+        Ok(thread_deleted)
     }
 
     fn create_thread(
@@ -1219,6 +1253,73 @@ mod tests {
                 .threads(fixture.pull_number)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn should_edit_and_delete_thread_comments_through_the_backend() {
+        let fixture = Fixture::new();
+        let details = fixture.details();
+        let path = PathBuf::from("file.txt");
+        let created = fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(
+                    &path,
+                    2,
+                    GhSide::Right,
+                    Some("user"),
+                    &details.head_sha,
+                    None,
+                ),
+            )
+            .unwrap();
+
+        fixture
+            .backend
+            .update_thread_comment(&details, &created.id, None, "user", "amended")
+            .unwrap();
+        let amended = fixture.store.threads(fixture.pull_number).unwrap();
+        let thread_deleted = fixture
+            .backend
+            .delete_thread_comment(&details, &created.id, None, "user")
+            .unwrap();
+
+        assert_eq!(amended[0].comments[0].body, "amended");
+        assert!(amended[0].comments[0].updated_at.is_some());
+        assert!(thread_deleted);
+        assert!(
+            fixture
+                .store
+                .threads(fixture.pull_number)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn should_reject_thread_comment_changes_on_closed_pull() {
+        let fixture = Fixture::new();
+        let mut details = fixture.details();
+        details.closed = true;
+
+        let edit = fixture
+            .backend
+            .update_thread_comment(&details, "thread", None, "user", "x")
+            .unwrap_err();
+        let delete = fixture
+            .backend
+            .delete_thread_comment(&details, "thread", None, "user")
+            .unwrap_err();
+
+        assert_eq!(
+            edit.to_string(),
+            "Cannot update a closed local pull request"
+        );
+        assert_eq!(
+            delete.to_string(),
+            "Cannot update a closed local pull request"
         );
     }
 

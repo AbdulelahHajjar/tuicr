@@ -232,7 +232,9 @@ On a `local:` pull request session, a line or range target opens a forge
 thread directly (printed in the `tuicr review threads` shape) and `--repo`
 must be that checkout. Answer existing threads with
 `tuicr review reply --session <slug> --thread <id>` and close them with
-`tuicr review resolve --session <slug> --thread <id>`.
+`tuicr review resolve --session <slug> --thread <id>`. Amend or retract your
+own comment with `tuicr review edit` / `tuicr review delete` (`--comment <id>`
+for a reply; the root is the default), always with your `--username`.
 
 For structured input, use `--input` with literal JSON, `@path/to/file.json`, or
 `-` for stdin. Supported target types are `review`, `file`, `line`, and

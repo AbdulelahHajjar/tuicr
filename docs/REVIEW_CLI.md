@@ -224,12 +224,24 @@ tuicr review reply   --session local:owner/repo/pr/1 --thread <id> \
   --username "Claude Fable" "Fixed in abc1234."
 tuicr review resolve --session local:owner/repo/pr/1 --thread <id>
 tuicr review resolve --session local:owner/repo/pr/1 --thread <id> --unresolve
+tuicr review edit    --session local:owner/repo/pr/1 --thread <id> [--comment <id>] \
+  --username "Claude Fable" "Done in def5678 instead."
+tuicr review delete  --session local:owner/repo/pr/1 --thread <id> [--comment <id>] \
+  --username "Claude Fable"
 ```
 
 `threads` prints every thread with its id, anchor, resolution state, and
 comments. `reply` appends a comment to a thread and prints it. `resolve`
 flips `is_resolved` (`--unresolve` reopens). All three accept only `local:`
 PR slugs; other forges return an error.
+
+`edit` replaces the body of a comment and prints it with `updated_at` set;
+`delete` removes one and prints `{ thread_id, comment_id, thread_deleted }`.
+Both address the root comment unless `--comment` names another, and both
+require the comment to carry the `--username` author (config `username`, then
+`"user"`, when omitted): amending or deleting someone else's comment is an
+error. Deleting the last comment removes the thread; deleting a root that has
+replies is refused, so resolve the thread or delete the replies first.
 
 New threads come from `add`:
 

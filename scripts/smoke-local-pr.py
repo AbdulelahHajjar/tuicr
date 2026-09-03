@@ -17,6 +17,7 @@ Scenario (mirrors docs/LOCAL_FORGE.md "Judged by"):
   6. `:comments unresolved` hides it, `:comments all` shows it
   7. plain `tuicr` -> Pull Requests tab -> `l` -> local branch row -> Enter opens local PR #1
   8. `tuicr review list --repo <repo>` lists the local PR session
+  9. `tuicr review reply` / `edit` / `delete` amend and retract an agent reply by id
 Exit status 0 when every check passes; each failed check is printed.
 """
 import argparse
@@ -258,6 +259,18 @@ def main():
         check(len(local_prs) >= 1 and all(s.get("kind") == "pr" for s in local_prs), "review list shows the local PR session as kind pr")
         comments = sh(repo, options.tuicr, "review", "comments", "--session", "local:smoke-org/smoke-repo/pr/1", "--repo", repo, env=env, check=False)
         check(comments.startswith("["), "review comments --session local:… resolves")
+
+        print("== tuicr review reply / edit / delete")
+        slug = "local:smoke-org/smoke-repo/pr/1"
+        thread_id = load_threads(threads_path)[0]["id"]
+        reply = json.loads(sh(repo, options.tuicr, "review", "reply", "--session", slug, "--thread", thread_id, "--username", "Agent", "on it", env=env))
+        edited = json.loads(sh(repo, options.tuicr, "review", "edit", "--session", slug, "--thread", thread_id, "--comment", reply["id"], "--username", "Agent", "done in abc1234", env=env))
+        check(edited["body"] == "done in abc1234" and edited["updated_at"], "review edit amends the agent reply and stamps updated_at")
+        foreign = subprocess.run([options.tuicr, "review", "edit", "--session", slug, "--thread", thread_id, "--username", "Agent", "rewrite"], cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        check(foreign.returncode == 1 and "only its author" in foreign.stderr, "review edit refuses another author's comment with exit 1")
+        deleted = json.loads(sh(repo, options.tuicr, "review", "delete", "--session", slug, "--thread", thread_id, "--comment", reply["id"], "--username", "Agent", env=env))
+        check(deleted["comment_id"] == reply["id"] and deleted["thread_deleted"] is False, "review delete removes the reply and keeps the thread")
+        check(len(load_threads(threads_path)[0]["comments"]) == 1, "thread keeps its root after the reply is deleted")
     finally:
         try:
             with open(os.path.join(work, "tui-output.txt"), "wb") as handle:

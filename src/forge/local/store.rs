@@ -42,6 +42,9 @@ pub(crate) struct LocalThreadComment {
     pub author: String,
     pub body: String,
     pub created_at: DateTime<Utc>,
+    /// Set when the body was amended after creation.
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,10 +302,64 @@ impl LocalForgeStore {
                 author: author.to_string(),
                 body: body.to_string(),
                 created_at: Utc::now(),
+                updated_at: None,
             };
             thread.comments.push(comment.clone());
             self.save_json(&self.threads_path(number), &file)?;
             Ok(comment)
+        })
+    }
+
+    /// Replace the body of a thread comment written by `author`. `None`
+    /// addresses the thread's root comment.
+    pub(crate) fn update_thread_comment(
+        &self,
+        number: u64,
+        thread_id: &str,
+        comment_id: Option<&str>,
+        author: &str,
+        body: &str,
+    ) -> Result<LocalThreadComment> {
+        with_directory_lock(&self.root, LOCK_FILENAME, || {
+            let mut file = self.load_threads(number)?;
+            let thread = find_thread(&mut file.threads, thread_id)?;
+            let index = own_comment_index(thread, comment_id, author)?;
+            let comment = &mut thread.comments[index];
+            comment.body = body.to_string();
+            comment.updated_at = Some(Utc::now());
+            let comment = comment.clone();
+            self.save_json(&self.threads_path(number), &file)?;
+            Ok(comment)
+        })
+    }
+
+    /// Remove a thread comment written by `author`; `None` addresses the
+    /// root comment. A root with replies is refused so the replies keep
+    /// their context. Returns the removed comment's id and whether the
+    /// thread went with it.
+    pub(crate) fn delete_thread_comment(
+        &self,
+        number: u64,
+        thread_id: &str,
+        comment_id: Option<&str>,
+        author: &str,
+    ) -> Result<(String, bool)> {
+        with_directory_lock(&self.root, LOCK_FILENAME, || {
+            let mut file = self.load_threads(number)?;
+            let thread = find_thread(&mut file.threads, thread_id)?;
+            let index = own_comment_index(thread, comment_id, author)?;
+            if index == 0 && thread.comments.len() > 1 {
+                return Err(TuicrError::Forge(format!(
+                    "Thread `{thread_id}` has replies; delete them first or resolve the thread"
+                )));
+            }
+            let removed = thread.comments.remove(index);
+            let thread_deleted = thread.comments.is_empty();
+            if thread_deleted {
+                file.threads.retain(|thread| thread.id != thread_id);
+            }
+            self.save_json(&self.threads_path(number), &file)?;
+            Ok((removed.id, thread_deleted))
         })
     }
 
@@ -340,6 +397,48 @@ impl LocalForgeStore {
         let bytes = serde_json::to_vec_pretty(value)?;
         write_atomic(path, &bytes)
     }
+}
+
+fn find_thread<'a>(threads: &'a mut [LocalThread], thread_id: &str) -> Result<&'a mut LocalThread> {
+    threads
+        .iter_mut()
+        .find(|thread| thread.id == thread_id)
+        .ok_or_else(|| {
+            TuicrError::Forge(format!("Local review thread `{thread_id}` was not found"))
+        })
+}
+
+/// Index of `comment_id` (root when `None`) in `thread`, provided `author`
+/// wrote it.
+fn own_comment_index(
+    thread: &LocalThread,
+    comment_id: Option<&str>,
+    author: &str,
+) -> Result<usize> {
+    let index = match comment_id {
+        Some(comment_id) => thread
+            .comments
+            .iter()
+            .position(|comment| comment.id == comment_id)
+            .ok_or_else(|| {
+                TuicrError::Forge(format!(
+                    "Comment `{comment_id}` was not found in thread `{}`",
+                    thread.id
+                ))
+            })?,
+        None => 0,
+    };
+    let comment = thread
+        .comments
+        .get(index)
+        .ok_or_else(|| TuicrError::Forge(format!("Thread `{}` has no comments", thread.id)))?;
+    if comment.author != author {
+        return Err(TuicrError::Forge(format!(
+            "Comment `{}` was written by `{}`; only its author can change it",
+            comment.id, comment.author
+        )));
+    }
+    Ok(index)
 }
 
 fn store_directory_name(repository: &ForgeRepository) -> String {
@@ -550,6 +649,126 @@ mod tests {
         assert_eq!(threads[0].review_id, Some(3));
         assert_eq!(threads[1].review_id, None);
         assert!(serde_json::to_value(&threads[1]).unwrap()["review_id"].is_null());
+    }
+
+    fn commented_thread(id: &str, authors: &[&str]) -> LocalThread {
+        let mut thread = thread(id);
+        thread.comments = authors
+            .iter()
+            .enumerate()
+            .map(|(index, author)| LocalThreadComment {
+                id: format!("{id}-c{index}"),
+                author: author.to_string(),
+                body: format!("body {index}"),
+                created_at: Utc::now(),
+                updated_at: None,
+            })
+            .collect();
+        thread
+    }
+
+    #[test]
+    fn should_edit_own_thread_comment_and_stamp_updated_at() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store
+            .add_thread(1, commented_thread("t", &["user", "Claude Fable"]))
+            .unwrap();
+
+        let root = store
+            .update_thread_comment(1, "t", None, "user", "new root")
+            .unwrap();
+        let reply = store
+            .update_thread_comment(1, "t", Some("t-c1"), "Claude Fable", "new reply")
+            .unwrap();
+
+        assert_eq!(root.body, "new root");
+        assert!(root.updated_at.is_some());
+        assert_eq!(reply.id, "t-c1");
+        let threads = store.threads(1).unwrap();
+        assert_eq!(threads[0].comments[0].body, "new root");
+        assert_eq!(threads[0].comments[1].body, "new reply");
+    }
+
+    #[test]
+    fn should_reject_changing_another_authors_comment() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store
+            .add_thread(1, commented_thread("t", &["user", "Claude Fable"]))
+            .unwrap();
+
+        let edit = store
+            .update_thread_comment(1, "t", Some("t-c1"), "user", "x")
+            .unwrap_err();
+        let delete = store
+            .delete_thread_comment(1, "t", None, "Claude Fable")
+            .unwrap_err();
+
+        assert_eq!(
+            edit.to_string(),
+            "Comment `t-c1` was written by `Claude Fable`; only its author can change it"
+        );
+        assert!(delete.to_string().contains("written by `user`"));
+        assert_eq!(store.threads(1).unwrap()[0].comments.len(), 2);
+    }
+
+    #[test]
+    fn should_delete_reply_and_keep_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store
+            .add_thread(1, commented_thread("t", &["user", "Claude Fable"]))
+            .unwrap();
+
+        let (id, thread_deleted) = store
+            .delete_thread_comment(1, "t", Some("t-c1"), "Claude Fable")
+            .unwrap();
+
+        assert_eq!(id, "t-c1");
+        assert!(!thread_deleted);
+        let threads = store.threads(1).unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comments.len(), 1);
+    }
+
+    #[test]
+    fn should_delete_last_comment_and_remove_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store
+            .add_thread(1, commented_thread("t", &["user"]))
+            .unwrap();
+        store
+            .add_thread(1, commented_thread("u", &["user"]))
+            .unwrap();
+
+        let (id, thread_deleted) = store.delete_thread_comment(1, "t", None, "user").unwrap();
+
+        assert_eq!(id, "t-c0");
+        assert!(thread_deleted);
+        let threads = store.threads(1).unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "u");
+    }
+
+    #[test]
+    fn should_reject_deleting_root_with_replies() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store
+            .add_thread(1, commented_thread("t", &["user", "Claude Fable"]))
+            .unwrap();
+
+        let error = store
+            .delete_thread_comment(1, "t", None, "user")
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Thread `t` has replies; delete them first or resolve the thread"
+        );
+        assert_eq!(store.threads(1).unwrap()[0].comments.len(), 2);
     }
 
     #[test]

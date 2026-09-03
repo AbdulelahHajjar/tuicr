@@ -1193,6 +1193,9 @@ pub struct App {
     pub comment_is_file_level: bool,
     pub comment_line: Option<(u32, LineSide)>,
     pub editing_comment_id: Option<String>,
+    /// Forge thread comment being edited in the comment box (Local pull
+    /// requests only); `None` while a session draft or new comment is edited.
+    pub editing_thread: Option<EditingThread>,
 
     pub visual_selection: Option<VisualSelection>,
     /// True once the active mouse drag has actually moved off the press cell.
@@ -1528,6 +1531,14 @@ pub enum CommentNavigatorKey {
 pub enum CommentNavigatorKind {
     Local(CommentType),
     Remote { muted: bool },
+}
+
+/// A forge thread comment open in the comment box for editing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditingThread {
+    pub thread_idx: usize,
+    pub thread_id: String,
+    pub comment_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

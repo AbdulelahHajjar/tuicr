@@ -2715,6 +2715,8 @@ use crate::forge::remote_comments::{
 
 type ResolveCalls = std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>;
 type CreateCalls = std::rc::Rc<std::cell::RefCell<Vec<CreatedThreadCall>>>;
+/// `update:<thread>:<comment>:<author>:<body>` and `delete:<thread>:<comment>:<author>` records.
+type EditCalls = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreatedThreadCall {
@@ -2736,6 +2738,8 @@ struct ThreadAwareForgeBackend {
     supports_resolve: bool,
     create_calls: CreateCalls,
     create_error: Option<String>,
+    edits: EditCalls,
+    edit_error: Option<String>,
 }
 
 impl ThreadAwareForgeBackend {
@@ -2753,6 +2757,8 @@ impl ThreadAwareForgeBackend {
             supports_resolve: false,
             create_calls: Default::default(),
             create_error: None,
+            edits: Default::default(),
+            edit_error: None,
         }
     }
 
@@ -2774,6 +2780,17 @@ impl ThreadAwareForgeBackend {
         self
     }
 
+    fn recording_edits(mut self) -> (Self, EditCalls) {
+        let edits: EditCalls = Default::default();
+        self.edits = edits.clone();
+        (self, edits)
+    }
+
+    fn failing_edits(mut self, message: &str) -> Self {
+        self.edit_error = Some(message.to_string());
+        self
+    }
+
     fn resolving(
         details: crate::forge::traits::PullRequestDetails,
         patch: String,
@@ -2790,6 +2807,8 @@ impl ThreadAwareForgeBackend {
                 supports_resolve: true,
                 create_calls: Default::default(),
                 create_error: None,
+                edits: Default::default(),
+                edit_error: None,
             },
             calls,
         )
@@ -2866,6 +2885,41 @@ impl crate::forge::traits::ForgeBackend for ThreadAwareForgeBackend {
             .borrow_mut()
             .push((thread_id.to_string(), resolved));
         Ok(())
+    }
+
+    fn update_thread_comment(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+        thread_id: &str,
+        comment_id: Option<&str>,
+        author: &str,
+        body: &str,
+    ) -> Result<()> {
+        if let Some(message) = &self.edit_error {
+            return Err(TuicrError::Forge(message.clone()));
+        }
+        self.edits.borrow_mut().push(format!(
+            "update:{thread_id}:{}:{author}:{body}",
+            comment_id.unwrap_or("root")
+        ));
+        Ok(())
+    }
+
+    fn delete_thread_comment(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+        thread_id: &str,
+        comment_id: Option<&str>,
+        author: &str,
+    ) -> Result<bool> {
+        if let Some(message) = &self.edit_error {
+            return Err(TuicrError::Forge(message.clone()));
+        }
+        self.edits.borrow_mut().push(format!(
+            "delete:{thread_id}:{}:{author}",
+            comment_id.unwrap_or("root")
+        ));
+        Ok(true)
     }
 
     fn create_thread(
@@ -3309,6 +3363,123 @@ fn should_keep_comment_text_when_local_thread_creation_fails() {
         app.message.as_ref().unwrap().content,
         "Could not create thread: disk full"
     );
+}
+
+fn editing_local_app(backend: ThreadAwareForgeBackend) -> App {
+    let mut app = build_app();
+    app.open_pr_with_backend(&local_sample_pr(42, "answer"), Box::new(backend), None)
+        .unwrap();
+    app.username = "alice".to_string();
+    app.diff_state.cursor_line = app
+        .line_annotations
+        .iter()
+        .position(|line| matches!(line, AnnotatedLine::RemoteThreadLine { .. }))
+        .unwrap();
+    app
+}
+
+fn local_thread_backend() -> ThreadAwareForgeBackend {
+    ThreadAwareForgeBackend::new(
+        local_pr_details(42, "answer"),
+        crate::forge::github::gh::tests_fixture::SIMPLE_PATCH.to_string(),
+        vec![sample_thread(2, "remote", false, false)],
+    )
+}
+
+#[test]
+fn should_delete_own_local_thread_under_cursor() {
+    let (backend, edits) = local_thread_backend().recording_edits();
+    let mut app = editing_local_app(backend);
+
+    app.delete_local_thread_at_cursor().unwrap();
+
+    assert_eq!(&*edits.borrow(), &["delete:T:root:alice".to_string()]);
+    assert!(app.forge_review_threads.is_empty());
+    assert_eq!(app.message.as_ref().unwrap().content, "Thread deleted");
+    assert!(app.build_comment_navigator_items().is_empty());
+}
+
+#[test]
+fn should_refuse_to_delete_another_authors_thread() {
+    let (backend, edits) = local_thread_backend().recording_edits();
+    let mut app = editing_local_app(backend);
+    app.username = "user".to_string();
+
+    let error = app.delete_local_thread_at_cursor().unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "Thread by alice — only its author can delete it"
+    );
+    assert!(edits.borrow().is_empty());
+    assert_eq!(app.forge_review_threads.len(), 1);
+}
+
+#[test]
+fn should_edit_own_local_thread_and_save() {
+    let (backend, edits) = local_thread_backend().recording_edits();
+    let mut app = editing_local_app(backend);
+
+    app.edit_local_thread_at_cursor(true).unwrap();
+    assert_eq!(app.input_mode, InputMode::Comment);
+    assert_eq!(app.comment_buffer, "remote");
+    assert_eq!(app.comment_cursor, "remote".len());
+    app.comment_buffer = "remote v2".to_string();
+    app.save_comment();
+
+    assert_eq!(
+        &*edits.borrow(),
+        &["update:T:C:alice:remote v2".to_string()]
+    );
+    assert_eq!(app.forge_review_threads[0].comments[0].body, "remote v2");
+    assert_eq!(app.input_mode, InputMode::Normal);
+    assert!(app.editing_thread.is_none());
+    assert_eq!(
+        app.message.as_ref().unwrap().content,
+        "Thread comment updated"
+    );
+    assert_eq!(line_draft_count(&app), 0);
+}
+
+#[test]
+fn should_keep_editor_open_when_thread_edit_fails() {
+    let mut app = editing_local_app(local_thread_backend().failing_edits("disk full"));
+
+    app.edit_local_thread_at_cursor(false).unwrap();
+    app.comment_buffer = "remote v2".to_string();
+    app.save_comment();
+
+    assert_eq!(app.input_mode, InputMode::Comment);
+    assert_eq!(app.comment_buffer, "remote v2");
+    assert!(app.editing_thread.is_some());
+    assert_eq!(app.forge_review_threads[0].comments[0].body, "remote");
+    assert_eq!(
+        app.message.as_ref().unwrap().content,
+        "Could not update thread: disk full"
+    );
+}
+
+#[test]
+fn should_keep_thread_rows_read_only_outside_local_pull_requests() {
+    let (mut app, _calls) = resolving_thread_app();
+    app.session.remote_comments_visibility = PrCommentsVisibility::All;
+    app.rebuild_annotations();
+    app.diff_state.cursor_line = app
+        .line_annotations
+        .iter()
+        .position(|line| matches!(line, AnnotatedLine::RemoteThreadLine { .. }))
+        .unwrap();
+
+    assert!(app.cursor_on_remote_thread());
+    assert!(!app.cursor_on_local_thread());
+    let error = app.delete_local_thread_at_cursor().unwrap_err();
+    assert!(matches!(error, TuicrError::UnsupportedOperation(_)));
+    assert!(
+        error
+            .to_string()
+            .ends_with("Editing review threads is not supported on GitHub")
+    );
+    assert_eq!(app.input_mode, InputMode::Normal);
 }
 
 #[test]

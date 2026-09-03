@@ -575,6 +575,12 @@ fn main() -> anyhow::Result<()> {
                     if pending_d {
                         pending_d = false;
                         if key.code == crossterm::event::KeyCode::Char('d') {
+                            if app.cursor_on_local_thread() {
+                                if let Err(error) = app.delete_local_thread_at_cursor() {
+                                    app.set_message(error.to_string());
+                                }
+                                continue;
+                            }
                             if app.cursor_on_locked_comment() {
                                 let forge = app.forge_display_name();
                                 app.set_message(format!(

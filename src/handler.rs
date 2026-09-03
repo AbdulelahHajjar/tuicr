@@ -1572,6 +1572,12 @@ pub fn handle_comment_navigator_action(app: &mut App, action: Action) {
 /// the end (vim `A` / non-vim default) or beginning (vim `i`). Surfaces the
 /// right message when the comment is read-only or absent.
 fn edit_comment_at_cursor(app: &mut App, cursor_at_end: bool) {
+    if app.cursor_on_local_thread() {
+        if let Err(error) = app.edit_local_thread_at_cursor(cursor_at_end) {
+            app.set_message(error.to_string());
+        }
+        return;
+    }
     if app.cursor_on_locked_comment() {
         let forge = app.forge_display_name();
         app.set_message(format!(

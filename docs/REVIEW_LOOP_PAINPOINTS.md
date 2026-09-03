@@ -66,6 +66,9 @@ head and whether it is outdated — today only `original_line`/`original_commit`
 
 ### G4. Edit or retract a thread comment
 
+Status (2026-09-03): implemented — see `docs/LOCAL_FORGE.md` § Editing and deleting threads and
+`docs/REVIEW_CLI.md` § Forge Threads.
+
 Invariant: the author of a thread comment can amend or delete it on a local PR.
 
 Why: drafts were the revise-before-send grace window; direct-to-thread (M1) removes it. A

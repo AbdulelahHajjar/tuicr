@@ -121,7 +121,8 @@ threads live in tuicr's data directory. The backend never calls a forge CLI or t
 never writes inside the checkout. It follows new commits on the head branch automatically. In the
 Pull Requests tab, press `l` to switch between Forge and Local branches. Use `:resolve` and
 `:unresolve` on a thread selected in the comment navigator or under the diff cursor. Line comments
-saved on a local pull request become threads immediately, so `:submit` only records the verdict.
+saved on a local pull request become threads immediately, so `:submit` only records the verdict;
+`dd` and `i` on your own thread delete or edit it.
 
 | Command | Action |
 |---------|--------|

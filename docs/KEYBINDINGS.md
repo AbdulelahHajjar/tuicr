@@ -137,8 +137,8 @@ Shown below the file tree when local comments or visible remote PR threads exist
 | `C` | Add file comment |
 | `<leader>c` | Add review comment |
 | `v` / `V` | Enter visual mode for range comments |
-| `dd` | Delete comment at cursor |
-| `i` | Edit comment at cursor (vim: text cursor at start) |
+| `dd` | Delete comment at cursor (on a Local pull request, also your own thread) |
+| `i` | Edit comment at cursor (vim: text cursor at start); on a Local pull request, also your own thread's root comment |
 | `A` | Edit comment at cursor with text cursor at end (vim mode only) |
 | `e` | Open focused file in `$EDITOR` |
 | `y` | Copy review to clipboard |
@@ -173,7 +173,8 @@ override `$EDITOR`.
 
 On a Local pull request, saving a new line or range comment opens a forge thread immediately,
 authored as the config `username`; file and review comments stay drafts. If the write fails the
-box stays open with its text. See `docs/LOCAL_FORGE.md`.
+box stays open with its text. `dd` and `i` on a thread row delete or edit the thread when you wrote
+its root comment; a root that already has replies cannot be deleted. See `docs/LOCAL_FORGE.md`.
 
 With `comment_vim = true` the box uses [`edtui`](https://github.com/preiter93/edtui)
 modal editing (Normal/Insert/Visual: `hjkl`, `w`/`b`/`e`, `dd`/`D`/`ciw`/`x`,

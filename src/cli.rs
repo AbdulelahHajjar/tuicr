@@ -338,6 +338,55 @@ pub enum ReviewCommand {
         content: String,
     },
 
+    /// Replace the body of a thread comment you wrote on a local pull request.
+    Edit {
+        /// PR session slug, e.g. `local:owner/repo/pr/1`.
+        #[arg(long, value_name = "SESSION")]
+        session: String,
+
+        /// Thread id from `tuicr review threads`.
+        #[arg(long, value_name = "THREAD")]
+        thread: String,
+
+        /// Comment id within the thread; defaults to the root comment.
+        #[arg(long, value_name = "COMMENT")]
+        comment: Option<String>,
+
+        /// Author the comment must carry. Falls back to the config
+        /// `username` setting, then to `"user"`.
+        #[arg(long, value_name = "NAME")]
+        username: Option<String>,
+
+        /// New comment text.
+        #[arg(
+            value_name = "COMMENT",
+            value_parser = non_empty_comment_text,
+            allow_hyphen_values = true
+        )]
+        content: String,
+    },
+
+    /// Delete a thread comment you wrote on a local pull request. Deleting
+    /// the last comment removes the thread; a root with replies is refused.
+    Delete {
+        /// PR session slug, e.g. `local:owner/repo/pr/1`.
+        #[arg(long, value_name = "SESSION")]
+        session: String,
+
+        /// Thread id from `tuicr review threads`.
+        #[arg(long, value_name = "THREAD")]
+        thread: String,
+
+        /// Comment id within the thread; defaults to the root comment.
+        #[arg(long, value_name = "COMMENT")]
+        comment: Option<String>,
+
+        /// Author the comment must carry. Falls back to the config
+        /// `username` setting, then to `"user"`.
+        #[arg(long, value_name = "NAME")]
+        username: Option<String>,
+    },
+
     /// Resolve or unresolve a forge review thread on a local pull request.
     Resolve {
         /// PR session slug, e.g. `local:owner/repo/pr/1`.

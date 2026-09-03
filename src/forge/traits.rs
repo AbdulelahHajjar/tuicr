@@ -666,6 +666,38 @@ pub trait ForgeBackend {
         )))
     }
 
+    /// Replace the body of a thread comment written by `author` (`None`
+    /// comment id = the root comment) when the forge supports it.
+    fn update_thread_comment(
+        &self,
+        pr: &PullRequestDetails,
+        _thread_id: &str,
+        _comment_id: Option<&str>,
+        _author: &str,
+        _body: &str,
+    ) -> Result<()> {
+        Err(crate::error::TuicrError::UnsupportedOperation(format!(
+            "Editing review threads is not supported on {}",
+            pr.repository.kind.display_name()
+        )))
+    }
+
+    /// Delete a thread comment written by `author` (`None` = the root
+    /// comment) when the forge supports it. Returns whether the thread was
+    /// removed with its last comment.
+    fn delete_thread_comment(
+        &self,
+        pr: &PullRequestDetails,
+        _thread_id: &str,
+        _comment_id: Option<&str>,
+        _author: &str,
+    ) -> Result<bool> {
+        Err(crate::error::TuicrError::UnsupportedOperation(format!(
+            "Deleting review threads is not supported on {}",
+            pr.repository.kind.display_name()
+        )))
+    }
+
     /// Open a review thread at a diff line when the forge supports it.
     fn create_thread(
         &self,

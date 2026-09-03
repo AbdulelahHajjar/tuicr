@@ -954,6 +954,7 @@ impl App {
         self.comment_vim_pending = CommentVimPending::None;
         self.comment_is_review_level = false;
         self.editing_comment_id = None;
+        self.editing_thread = None;
         self.comment_line_range = None;
     }
 
@@ -964,6 +965,21 @@ impl App {
         }
 
         let content = self.comment_buffer.trim().to_string();
+
+        if let Some(edit) = self.editing_thread.take() {
+            match self.save_local_thread_edit(&edit, &content) {
+                Ok(()) => {
+                    self.set_message("Thread comment updated");
+                    self.exit_comment_mode();
+                }
+                Err(error) => {
+                    // Keep the editor open so the text survives a failed write.
+                    self.editing_thread = Some(edit);
+                    self.set_error(format!("Could not update thread: {error}"));
+                }
+            }
+            return;
+        }
 
         let mut message = "Error: Could not save comment".to_string();
         let mut autosave_error = None;

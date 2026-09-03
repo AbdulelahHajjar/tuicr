@@ -70,6 +70,26 @@ fn run_with_writer(command: ReviewCommand, out: &mut impl Write) -> Result<()> {
             thread,
             unresolve,
         } => set_thread_resolution(&session, &thread, !unresolve, out),
+        ReviewCommand::Edit {
+            session,
+            thread,
+            comment,
+            username,
+            content,
+        } => edit_forge_thread_comment(
+            &session,
+            &thread,
+            comment.as_deref(),
+            username,
+            &content,
+            out,
+        ),
+        ReviewCommand::Delete {
+            session,
+            thread,
+            comment,
+            username,
+        } => delete_forge_thread_comment(&session, &thread, comment.as_deref(), username, out),
     }
 }
 
@@ -541,6 +561,47 @@ fn reply_to_forge_thread(
     let author = resolve_cli_author(username);
     let comment = store.reply_to_thread(number, thread, &author, content)?;
     serde_json::to_writer_pretty(&mut *out, &comment)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn edit_forge_thread_comment(
+    session: &str,
+    thread: &str,
+    comment: Option<&str>,
+    username: Option<String>,
+    content: &str,
+    out: &mut impl Write,
+) -> Result<()> {
+    let (repository, number) = local_pr_target(session)?;
+    let store = LocalForgeStore::new(&repository)?;
+    let author = resolve_cli_author(username);
+    let updated = store.update_thread_comment(number, thread, comment, &author, content)?;
+    serde_json::to_writer_pretty(&mut *out, &updated)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn delete_forge_thread_comment(
+    session: &str,
+    thread: &str,
+    comment: Option<&str>,
+    username: Option<String>,
+    out: &mut impl Write,
+) -> Result<()> {
+    let (repository, number) = local_pr_target(session)?;
+    let store = LocalForgeStore::new(&repository)?;
+    let author = resolve_cli_author(username);
+    let (comment_id, thread_deleted) =
+        store.delete_thread_comment(number, thread, comment, &author)?;
+    serde_json::to_writer_pretty(
+        &mut *out,
+        &serde_json::json!({
+            "thread_id": thread,
+            "comment_id": comment_id,
+            "thread_deleted": thread_deleted,
+        }),
+    )?;
     writeln!(out)?;
     Ok(())
 }
@@ -1054,6 +1115,82 @@ mod tests {
                 .ends_with("ranged")
         );
         assert_eq!(local_threads(&temp).len(), 1);
+    }
+
+    #[test]
+    fn should_edit_and_delete_thread_comments_through_the_cli() {
+        let (temp, checkout, _guard) = local_pull_fixture();
+        let slug = "local:owner/project/pr/1";
+        let mut out = Vec::new();
+        run_with_writer(
+            add_command(slug, &checkout, Some("file.txt"), Some(2), Some("user")),
+            &mut out,
+        )
+        .unwrap();
+        let thread_id = serde_json::from_slice::<serde_json::Value>(&out).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut out = Vec::new();
+        run_with_writer(
+            ReviewCommand::Reply {
+                session: slug.to_string(),
+                thread: thread_id.clone(),
+                username: Some("Claude Fable".to_string()),
+                content: "on it".to_string(),
+            },
+            &mut out,
+        )
+        .unwrap();
+        let reply_id = serde_json::from_slice::<serde_json::Value>(&out).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let edit = |comment: Option<&str>, username: &str, body: &str| ReviewCommand::Edit {
+            session: slug.to_string(),
+            thread: thread_id.clone(),
+            comment: comment.map(str::to_string),
+            username: Some(username.to_string()),
+            content: body.to_string(),
+        };
+        let delete = |comment: Option<&str>, username: &str| ReviewCommand::Delete {
+            session: slug.to_string(),
+            thread: thread_id.clone(),
+            comment: comment.map(str::to_string),
+            username: Some(username.to_string()),
+        };
+
+        // The agent amends its own reply; the user's root stays foreign to it.
+        let mut out = Vec::new();
+        run_with_writer(
+            edit(Some(&reply_id), "Claude Fable", "done in abc1234"),
+            &mut out,
+        )
+        .unwrap();
+        let edited: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(edited["body"], "done in abc1234");
+        assert!(!edited["updated_at"].is_null());
+        let foreign =
+            run_with_writer(edit(None, "Claude Fable", "rewrite"), &mut Vec::new()).unwrap_err();
+        assert!(
+            foreign
+                .to_string()
+                .contains("only its author can change it")
+        );
+
+        // A root with a reply is refused; the reply goes first, then the root takes the thread.
+        let root_first = run_with_writer(delete(None, "user"), &mut Vec::new()).unwrap_err();
+        assert!(root_first.to_string().contains("has replies"));
+        let mut out = Vec::new();
+        run_with_writer(delete(Some(&reply_id), "Claude Fable"), &mut out).unwrap();
+        let deleted: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(deleted["comment_id"], reply_id);
+        assert_eq!(deleted["thread_deleted"], false);
+        let mut out = Vec::new();
+        run_with_writer(delete(None, "user"), &mut out).unwrap();
+        let deleted: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(deleted["thread_deleted"], true);
+        assert!(local_threads(&temp).is_empty());
     }
 
     #[test]

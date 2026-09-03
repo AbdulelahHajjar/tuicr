@@ -120,13 +120,13 @@ over a directory rather than duplicated. Every file carries `"version": 1`.
   "original_line": 171, "original_commit": "<head sha when created>",
   "base_commit": "<base sha when created>", "line_text": "<diff line content, no origin marker>",
   "created_at": "…", "is_resolved": false, "resolved_at": null, "review_id": 1,
-  "comments": [ { "id": "…uuid…", "author": "…", "body": "…", "created_at": "…" } ] }
+  "comments": [ { "id": "…uuid…", "author": "…", "body": "…", "created_at": "…", "updated_at": null } ] }
 ```
 
 Review ids are numeric (`GhCreateReviewResponse.id` is `u64`); thread and
 comment ids are UUID strings (`RemoteReviewThread.id` is an opaque string).
 `review_id` is `null` for threads opened directly, outside any review; nothing
-reads it back.
+reads it back. `updated_at` is set when a comment body is amended.
 
 ## `LocalForgeBackend` — `ForgeBackend` method by method
 
@@ -153,6 +153,7 @@ a network. The checkout is the source of truth.
 | `local_checkout_path()` | `Some(checkout)`. |
 | `create_review(pr, request)` | Allocate a review id; store the review (`Draft` → `PENDING`, others → their GitHub event name; `commit_id = request.commit_id`; `body`). For each `InlineComment`, create one thread anchored at `(path, line, side)` with `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` = content of that diff line (looked up in the `start..end` patch the comment was mapped against; empty string when it cannot be found), one root comment (`body`, Author, `review_id`). Any event reuses the Author's outstanding `PENDING` review: another Draft updates its non-empty body and attaches new threads; a non-Draft submits that same review in place. Only when no pending review exists is a new review allocated. The range the inline comments were mapped against arrives as `CreateReviewRequest::diff_start_sha` (the parent SHA the displayed diff starts at, `None` for the full pull request); `line_text` is looked up in the `<that start>..<request.commit_id>` patch. Return `GhCreateReviewResponse { id, html_url, state }` where `state` is `PENDING`/`COMMENTED`/`APPROVED`/`CHANGES_REQUESTED`. |
 | `resolve_thread(pr, thread_id, resolved)` — **new trait method** | Set `is_resolved`/`resolved_at` on the thread and persist. Default implementation on the trait: `Err(TuicrError::UnsupportedOperation("Resolving review threads is not supported on <Forge>"))`; no other backend implements it in this version. |
+| `update_thread_comment(pr, thread_id, comment_id, author, body)` / `delete_thread_comment(pr, thread_id, comment_id, author)` — **new trait methods** | Amend or remove one comment (`comment_id = None` addresses the root). The comment must carry `author`; anyone else's is refused. Deleting the last comment removes the thread; deleting a root that has replies is refused so the replies keep their context. `delete` returns whether the thread went with the comment. Both reject a closed pull. Defaults on the trait: `UnsupportedOperation`; only Local implements them. |
 | `create_thread(pr, request)` — **new trait method** | Open one thread at `(path, line, side)` outside any review: `original_commit = request.commit_id`, `base_commit = pr.base_sha`, `line_text` looked up in the `<diff_start_sha or base>..<commit_id>` patch exactly as `create_review` does, `review_id = null`, one root comment authored by `request.author` (falling back to Author). The path must be part of that diff (error otherwise); a line outside it stores an empty `line_text`. A closed pull is rejected. Returns the thread as a `RemoteReviewThread` anchored at `original_line`, not outdated. Default on the trait: `UnsupportedOperation`; only Local implements it. The inherent `create_local_thread` returns the stored record for the CLI. |
 
 ### Anchoring (outdated detection)
@@ -273,6 +274,19 @@ The CLI mirrors this: `tuicr review add --session local:… --target-file <path>
 --line <n>` opens a thread (see `docs/REVIEW_CLI.md`). `--repo` must point at
 the checkout so `line_text` can be snapshotted against the pull request diff.
 
+## Editing and deleting threads
+
+`dd` on a thread row of an open Local pull request deletes the thread when
+the viewer (config `username`) wrote its root comment; `i` / `A` open that
+root comment in the comment box, and saving writes the new body through
+`update_thread_comment` and mirrors it in the diff. The body is edited as
+stored, `[TYPE] ` tag included. A thread whose root belongs to someone else
+answers "Thread by X — only its author can edit/delete it"; a root that
+already has replies cannot be deleted (resolve it, or delete the replies
+first). On other forges thread rows stay read-only. Replies are edited and
+deleted through the CLI (`tuicr review edit` / `tuicr review delete`), which
+address any comment by id under the same author rule.
+
 ## Fork build markers
 
 - `tuicr --version` prints `tuicr <cargo version>+local-forge` (build metadata
@@ -310,4 +324,5 @@ coverage (not exhaustive):
 - direct threads: store `add_thread` keeps `review_id` null and older numeric files still load; backend `create_thread` snapshots `line_text` (full diff and commit subset), stamps the requested author, rejects a closed pull and a path outside the diff
 - TUI save on a Local pull request: line and range comments call `create_thread` with the displayed diff's SHAs and leave no draft; file-level, GitHub, and closed-pull saves still draft; a failed write keeps the comment box open
 - `tuicr review add` on a `local:` slug with a line target writes a thread (flags and `--input`), rejects a non-checkout `--repo` and a checkout of another repository, and still drafts for review-level targets and other forges
+- thread edits: store `update_thread_comment` stamps `updated_at` and `delete_thread_comment` removes an emptied thread; both refuse another author's comment and a root with replies cannot be deleted; the backend rejects a closed pull; TUI `dd` / `i` act on the viewer's own thread and keep the editor open on a failed write; `tuicr review edit` / `delete` address comments by id
 - regression: every existing test still passes; GitHub target parsing unchanged
