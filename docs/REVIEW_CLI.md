@@ -231,7 +231,8 @@ tuicr review delete  --session local:owner/repo/pr/1 --thread <id> [--comment <i
 ```
 
 `threads` prints every thread with its id, anchor, resolution state, and
-comments. `reply` appends a comment to a thread and prints it. `resolve`
+comments. Each thread's `updated_at` changes on every mutation — reply, edit,
+delete, resolve, unresolve — so a poller can compare that one field per thread. `reply` appends a comment to a thread and prints it. `resolve`
 flips `is_resolved` (`--unresolve` reopens). All three accept only `local:`
 PR slugs; other forges return an error.
 

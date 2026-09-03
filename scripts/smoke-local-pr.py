@@ -263,6 +263,7 @@ def main():
         print("== tuicr review reply / edit / delete")
         slug = "local:smoke-org/smoke-repo/pr/1"
         thread_id = load_threads(threads_path)[0]["id"]
+        stamp_before = load_threads(threads_path)[0]["updated_at"]
         reply = json.loads(sh(repo, options.tuicr, "review", "reply", "--session", slug, "--thread", thread_id, "--username", "Agent", "on it", env=env))
         edited = json.loads(sh(repo, options.tuicr, "review", "edit", "--session", slug, "--thread", thread_id, "--comment", reply["id"], "--username", "Agent", "done in abc1234", env=env))
         check(edited["body"] == "done in abc1234" and edited["updated_at"], "review edit amends the agent reply and stamps updated_at")
@@ -271,6 +272,7 @@ def main():
         deleted = json.loads(sh(repo, options.tuicr, "review", "delete", "--session", slug, "--thread", thread_id, "--comment", reply["id"], "--username", "Agent", env=env))
         check(deleted["comment_id"] == reply["id"] and deleted["thread_deleted"] is False, "review delete removes the reply and keeps the thread")
         check(len(load_threads(threads_path)[0]["comments"]) == 1, "thread keeps its root after the reply is deleted")
+        check(load_threads(threads_path)[0]["updated_at"] > stamp_before, "thread updated_at moved with the reply, edit, and delete")
     finally:
         try:
             with open(os.path.join(work, "tui-output.txt"), "wb") as handle:

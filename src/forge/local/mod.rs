@@ -210,6 +210,7 @@ impl LocalForgeBackend {
             line_text: anchor::line_text(files, request.path, side, request.line)
                 .unwrap_or_default(),
             created_at: now,
+            updated_at: Some(now),
             is_resolved: false,
             resolved_at: None,
             review_id: None,

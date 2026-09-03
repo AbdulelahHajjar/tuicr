@@ -933,6 +933,7 @@ mod tests {
             base_commit: "base".to_string(),
             line_text: "let x = 1;".to_string(),
             created_at: chrono::Utc::now(),
+            updated_at: None,
             is_resolved: false,
             resolved_at: None,
             review_id: None,

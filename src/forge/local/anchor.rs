@@ -111,6 +111,7 @@ mod tests {
             base_commit: "base".to_string(),
             line_text: text.to_string(),
             created_at: chrono::Utc::now(),
+            updated_at: None,
             is_resolved: false,
             resolved_at: None,
             review_id: Some(1),

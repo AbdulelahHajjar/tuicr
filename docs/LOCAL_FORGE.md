@@ -119,14 +119,17 @@ over a directory rather than duplicated. Every file carries `"version": 1`.
 { "id": "…uuid…", "path": "Sources/A.swift", "side": "RIGHT" | "LEFT",
   "original_line": 171, "original_commit": "<head sha when created>",
   "base_commit": "<base sha when created>", "line_text": "<diff line content, no origin marker>",
-  "created_at": "…", "is_resolved": false, "resolved_at": null, "review_id": 1,
+  "created_at": "…", "updated_at": "…", "is_resolved": false, "resolved_at": null, "review_id": 1,
   "comments": [ { "id": "…uuid…", "author": "…", "body": "…", "created_at": "…", "updated_at": null } ] }
 ```
 
 Review ids are numeric (`GhCreateReviewResponse.id` is `u64`); thread and
 comment ids are UUID strings (`RemoteReviewThread.id` is an opaque string).
 `review_id` is `null` for threads opened directly, outside any review; nothing
-reads it back. `updated_at` is set when a comment body is amended.
+reads it back. A thread's `updated_at` moves on every mutation — reply, edit,
+delete, resolve, unresolve — and is filled from `created_at` when a file
+predates the field, so one field comparison tells a poller the thread changed.
+A comment's `updated_at` is set when its body is amended.
 
 ## `LocalForgeBackend` — `ForgeBackend` method by method
 

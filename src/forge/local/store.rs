@@ -57,6 +57,11 @@ pub(crate) struct LocalThread {
     pub base_commit: String,
     pub line_text: String,
     pub created_at: DateTime<Utc>,
+    /// Last mutation of the thread: a reply, an edit, a deletion, or a
+    /// resolution change. Filled from `created_at` for threads stored
+    /// before the field existed.
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     pub is_resolved: bool,
     pub resolved_at: Option<DateTime<Utc>>,
     /// Review this thread was submitted with; `None` for threads created
@@ -277,6 +282,7 @@ impl LocalForgeStore {
                 })?;
             thread.is_resolved = resolved;
             thread.resolved_at = resolved.then(Utc::now);
+            touch(thread);
             self.save_json(&self.threads_path(number), &file)
         })
     }
@@ -305,6 +311,7 @@ impl LocalForgeStore {
                 updated_at: None,
             };
             thread.comments.push(comment.clone());
+            touch(thread);
             self.save_json(&self.threads_path(number), &file)?;
             Ok(comment)
         })
@@ -328,6 +335,7 @@ impl LocalForgeStore {
             comment.body = body.to_string();
             comment.updated_at = Some(Utc::now());
             let comment = comment.clone();
+            touch(thread);
             self.save_json(&self.threads_path(number), &file)?;
             Ok(comment)
         })
@@ -355,6 +363,9 @@ impl LocalForgeStore {
             }
             let removed = thread.comments.remove(index);
             let thread_deleted = thread.comments.is_empty();
+            if !thread_deleted {
+                touch(thread);
+            }
             if thread_deleted {
                 file.threads.retain(|thread| thread.id != thread_id);
             }
@@ -390,13 +401,23 @@ impl LocalForgeStore {
     }
 
     fn load_threads(&self, number: u64) -> Result<ThreadsFile> {
-        load_json(&self.threads_path(number))
+        let mut file: ThreadsFile = load_json(&self.threads_path(number))?;
+        for thread in &mut file.threads {
+            if thread.updated_at.is_none() {
+                thread.updated_at = Some(thread.created_at);
+            }
+        }
+        Ok(file)
     }
 
     fn save_json(&self, path: &Path, value: &impl Serialize) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(value)?;
         write_atomic(path, &bytes)
     }
+}
+
+fn touch(thread: &mut LocalThread) {
+    thread.updated_at = Some(Utc::now());
 }
 
 fn find_thread<'a>(threads: &'a mut [LocalThread], thread_id: &str) -> Result<&'a mut LocalThread> {
@@ -549,6 +570,7 @@ mod tests {
             base_commit: "base".to_string(),
             line_text: "line".to_string(),
             created_at: Utc::now(),
+            updated_at: None,
             is_resolved: false,
             resolved_at: None,
             review_id: None,
@@ -608,6 +630,7 @@ mod tests {
             base_commit: "base".to_string(),
             line_text: "line".to_string(),
             created_at: Utc::now(),
+            updated_at: None,
             is_resolved: false,
             resolved_at: None,
             review_id: None,
@@ -769,6 +792,54 @@ mod tests {
             "Thread `t` has replies; delete them first or resolve the thread"
         );
         assert_eq!(store.threads(1).unwrap()[0].comments.len(), 2);
+    }
+
+    #[test]
+    fn should_bump_thread_updated_at_on_every_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        store
+            .add_thread(1, commented_thread("t", &["user"]))
+            .unwrap();
+        let stamp = || store.threads(1).unwrap()[0].updated_at.unwrap();
+        let mut last = stamp();
+        let mut advanced = |label: &str| {
+            let now = stamp();
+            assert!(now > last, "{label} did not bump updated_at");
+            last = now;
+        };
+
+        let reply = store
+            .reply_to_thread(1, "t", "Claude Fable", "on it")
+            .unwrap();
+        advanced("reply");
+        store
+            .update_thread_comment(1, "t", Some(&reply.id), "Claude Fable", "done")
+            .unwrap();
+        advanced("edit");
+        store.resolve_thread(1, "t", true).unwrap();
+        advanced("resolve");
+        store.resolve_thread(1, "t", false).unwrap();
+        advanced("unresolve");
+        store
+            .delete_thread_comment(1, "t", Some(&reply.id), "Claude Fable")
+            .unwrap();
+        advanced("delete");
+    }
+
+    #[test]
+    fn should_fill_missing_thread_updated_at_from_created_at() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        let mut legacy = serde_json::to_value(thread("legacy")).unwrap();
+        legacy.as_object_mut().unwrap().remove("updated_at");
+        let file = serde_json::json!({ "version": 1, "threads": [legacy] });
+        fs::create_dir_all(store.threads_path(1).parent().unwrap()).unwrap();
+        fs::write(store.threads_path(1), file.to_string()).unwrap();
+
+        let threads = store.threads(1).unwrap();
+
+        assert_eq!(threads[0].updated_at, Some(threads[0].created_at));
     }
 
     #[test]
