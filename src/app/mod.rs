@@ -1305,6 +1305,9 @@ pub struct App {
     /// open-time head so the stale-head warning never fires; PR 6 may refresh
     /// it via a pre-submit `gh pr view` to power the warning.
     pub current_pr_head: Option<String>,
+    /// Thread-store marker the follow tick last saw for the open Local pull
+    /// request; `None` until the first tick samples it.
+    pub pr_threads_revision: Option<crate::forge::traits::ReviewThreadsRevision>,
     /// Extended PR metadata rendered at the top of the diff view. Populated in PR mode.
     pub pr_info: Option<crate::forge::traits::PullRequestInfo>,
     /// Whether pull-request CI checks are fetched and rendered. Defaults to

@@ -146,6 +146,7 @@ a network. The checkout is the source of truth.
 | `get_pull_request(target)` | Pull by `target.number`. `head_sha` = tip of `head_ref` (or `last_head_sha` when the branch is gone → closed), `base_sha` = `merge-base(base_ref, head_sha)`, `title` = tip subject, `body` = commit list: with one commit its body; with several, one `- <short sha> <subject>` line per commit oldest-first followed by each non-empty commit body indented. `author` = tip author, `updated_at` = tip time, `url` as above, `diff_start_sha: None`. |
 | `get_pull_request_info(target)` | `from_details` plus: `review_decision` = state of the newest non-pending review (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`), `None` when there is none; `latest_reviews` = newest non-pending review per author; `mergeable`/`merge_state`/`checks`/`requested_reviewers`/`issue_comments` empty. |
 | `get_pull_request_diff(pr)` | Cumulative `FilePatch`es for `base_sha..head_sha`. |
+| `review_threads_revision(pr)` — **new trait method** | `Some(ReviewThreadsRevision)` hashed from `pulls/<n>/threads.json`'s modification time and length (a distinct marker when the file is absent). Default on the trait: `Ok(None)`, which disables thread auto-refresh for that backend. |
 | `head_status(pr)` | `Open(head_sha)` while `refs/heads/<head>` exists, otherwise `Closed`. Other backends use the trait default `Ok(None)`. |
 | `get_pull_request_commit_range_diff(pr, start, end)` | `FilePatch`es for `start..end`. |
 | `list_pull_request_commits(pr)` | Commits `base_sha..head_sha`, oldest first: `oid`, 7-char `short_oid`, `summary` = subject, `author` = author name, `timestamp`. |
@@ -236,6 +237,20 @@ New config key `local_pr_follow_interval_ms` (default `1000`; `0` disables).
 `diff_watch_interval_ms` keeps its current meaning and stays ignored for
 pull requests of other forges.
 
+The same tick also watches the thread store. `review_threads_revision` (new
+trait method, default `Ok(None)`; Local hashes `threads.json`'s modification
+time and length, with a marker of its own for an absent file) is sampled once
+per tick, and when it differs from the last sample the threads are re-fetched
+**in place**: the rows already on screen stay until the new list lands, so a
+reply written by another process — `tuicr review reply` from an agent — shows
+up within an interval and without `:e`. The first sample after opening only
+records the marker (the open fetched those threads). A head move takes
+precedence, since its reload re-fetches threads anyway; the tick defers while
+a thread fetch is in flight, while the input mode is not `Normal`, or while a
+submit or reload runs. This process's own writes move the marker too and cost
+one background re-read. `local_pr_follow_interval_ms = 0` disables following
+and refreshing alike; `:e` remains the manual path.
+
 ## `:resolve` / `:unresolve`
 
 Command-mode commands (`CommandKind::ResolveThread(bool)`) available in PR
@@ -324,6 +339,7 @@ coverage (not exhaustive):
 - `:resolve`/`:unresolve` parse + app behaviour with a fake backend (navigator selection, cursor on thread row, cursor on anchored line, nothing at cursor, unsupported forge)
 - auto-follow tick: moved head → reload spawned once; no double spawn while in flight; disabled at `0`
 - `tuicr review list --repo <checkout>` lists a local PR session; `--session local:…` resolves
+- thread auto-refresh: store `threads_revision` differs across writes and for an absent file; the follow tick records the first sample without a fetch, re-fetches in place (rows kept) when the marker moves, reports unchanged when it matches, prefers a head move, and defers while a thread fetch is in flight
 - direct threads: store `add_thread` keeps `review_id` null and older numeric files still load; backend `create_thread` snapshots `line_text` (full diff and commit subset), stamps the requested author, rejects a closed pull and a path outside the diff
 - TUI save on a Local pull request: line and range comments call `create_thread` with the displayed diff's SHAs and leave no draft; file-level, GitHub, and closed-pull saves still draft; a failed write keeps the comment box open
 - `tuicr review add` on a `local:` slug with a line target writes a thread (flags and `--input`), rejects a non-checkout `--repo` and a checkout of another repository, and still drafts for review-level targets and other forges

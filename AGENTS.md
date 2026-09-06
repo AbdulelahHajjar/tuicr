@@ -263,6 +263,7 @@ Forge selection is host-driven: `parse_any_remote_url` tries Bitbucket (`bitbuck
 - `get_pull_request_info` — extended PR metadata for the description panel (`PullRequestInfo`). GitHub fetches `reviewDecision`, `mergeable`, `mergeStateStatus`, `reviewRequests`, `latestReviews`, and `statusCheckRollup` in the same `gh pr view` call; other backends default to `PullRequestInfo::from_details`.
 - `get_pull_request_diff` — cumulative PR changes as structured `FilePatch` values. Each forge obtains path/status metadata from its API and pairs it with patch bodies without decoding display headers.
 - `head_status` — optional live head state. Local returns `Open(head_sha)` or `Closed`; other backends default to `Ok(None)` and are never followed.
+- `review_threads_revision` — optional cheap marker for the thread store; Local hashes `threads.json`'s metadata so the follow tick can re-fetch threads in place when another process writes. Default `Ok(None)` disables it.
 - `list_pull_request_commits` — commits on the PR for the inline subset selector.
 - `list_pull_request_review_metadata` — best-effort viewer login + review commit OIDs used to preselect commits since the viewer's latest submitted review and mark already-reviewed commits in the inline selector.
   GitHub uses review metadata; GitLab combines `/user`, MR diff versions, approvals, and discussions; Bitbucket reads the PR's `participants` and reports account UUIDs (Cloud returns no usernames), with no commit OIDs since it does not record which commit an approval covered.

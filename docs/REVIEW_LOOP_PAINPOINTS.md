@@ -46,7 +46,8 @@ single action, authored by whoever wrote it, with no session-draft intermediary.
 
 Status (2026-09-03): partly covered — every thread carries an `updated_at` that moves on any
 mutation (reply, edit, delete, resolve, unresolve), so a poller compares one field per thread.
-No blocking watch or cursor yet.
+No blocking watch or cursor yet. TUI side (2026-09-06): the Local follow tick re-fetches threads
+in place when the store changes, so agent replies appear without `:e`.
 
 Invariant: an agent can ask "what changed since X?" for a PR slug and get an answer that is
 stable across session rotations and cannot race a concurrent writer.

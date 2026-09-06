@@ -118,7 +118,9 @@ including when reviewing root commits; ordinary SHA-1 repositories still default
 `tuicr pr` reviews the current branch against the repository's default branch without a remote
 service. Pass a branch to review it instead, or `--base <ref>` to choose the base. Reviews and
 threads live in tuicr's data directory. The backend never calls a forge CLI or the network and
-never writes inside the checkout. It follows new commits on the head branch automatically. In the
+never writes inside the checkout. It follows new commits on the head branch automatically and
+picks up thread replies written by other processes, such as an agent's `tuicr review reply`,
+without `:e`. In the
 Pull Requests tab, press `l` to switch between Forge and Local branches. Use `:resolve` and
 `:unresolve` on a thread selected in the comment navigator or under the diff cursor. Line comments
 saved on a local pull request become threads immediately, so `:submit` only records the verdict;

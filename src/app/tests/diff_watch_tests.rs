@@ -3,7 +3,9 @@ use crate::app::diff_load::{
     normalize_diff_watch_result,
 };
 use crate::app::*;
-use crate::forge::traits::{ForgeRepository, PrSessionKey, PullRequestHeadStatus};
+use crate::forge::traits::{
+    ForgeRepository, PrSessionKey, PullRequestHeadStatus, ReviewThreadsRevision,
+};
 use std::sync::mpsc;
 
 /// Minimal `VcsBackend` used only to satisfy `App::build`'s requirement for
@@ -116,7 +118,7 @@ fn local_pull_request_source(head: &str) -> DiffSource {
     }))
 }
 
-struct HeadStatusBackend(PullRequestHeadStatus);
+struct HeadStatusBackend(PullRequestHeadStatus, Option<u64>);
 
 impl crate::forge::traits::ForgeBackend for HeadStatusBackend {
     fn list_pull_requests(
@@ -169,6 +171,12 @@ impl crate::forge::traits::ForgeBackend for HeadStatusBackend {
     ) -> Result<Option<PullRequestHeadStatus>> {
         Ok(Some(self.0.clone()))
     }
+    fn review_threads_revision(
+        &self,
+        _pr: &crate::forge::traits::PullRequestDetails,
+    ) -> Result<Option<ReviewThreadsRevision>> {
+        Ok(self.1.map(ReviewThreadsRevision::new))
+    }
     fn create_review(
         &self,
         _pr: &crate::forge::traits::PullRequestDetails,
@@ -181,13 +189,116 @@ impl crate::forge::traits::ForgeBackend for HeadStatusBackend {
 fn local_follow_app() -> (App, String) {
     let head = "new".to_string();
     let mut app = build_app(Vec::new(), local_pull_request_source("old"));
-    app.forge_backend = Some(Box::new(HeadStatusBackend(PullRequestHeadStatus::Open(
-        head.clone(),
-    ))));
+    app.forge_backend = Some(Box::new(HeadStatusBackend(
+        PullRequestHeadStatus::Open(head.clone()),
+        None,
+    )));
     app.current_pr_head = Some("old".to_string());
     app.local_pr_follow_interval = Some(Duration::from_millis(500));
     app.next_local_pr_follow_at = Instant::now() - Duration::from_millis(1);
     (app, head)
+}
+
+/// A Local pull request whose head is unchanged, with the thread store at
+/// `store` and the app's last sample at `seen`.
+fn thread_revision_app(seen: Option<u64>, store: u64) -> App {
+    let mut app = build_app(Vec::new(), local_pull_request_source("old"));
+    app.forge_backend = Some(Box::new(HeadStatusBackend(
+        PullRequestHeadStatus::Open("old".to_string()),
+        Some(store),
+    )));
+    app.current_pr_head = Some("old".to_string());
+    app.pr_threads_revision = seen.map(ReviewThreadsRevision::new);
+    app.local_pr_follow_interval = Some(Duration::from_millis(500));
+    app.next_local_pr_follow_at = Instant::now() - Duration::from_millis(1);
+    app
+}
+
+fn shown_thread() -> crate::forge::remote_comments::RemoteReviewThread {
+    crate::forge::remote_comments::RemoteReviewThread {
+        id: "T".to_string(),
+        path: "src/lib.rs".to_string(),
+        line: Some(2),
+        side: crate::forge::remote_comments::RemoteCommentSide::Right,
+        is_resolved: false,
+        is_outdated: false,
+        comments: vec![crate::forge::remote_comments::RemoteReviewComment {
+            id: "C".to_string(),
+            author: Some("user".to_string()),
+            body: "shown".to_string(),
+            created_at: None,
+            in_reply_to: None,
+            url: "local:owner/project/pull/1#comment-C".to_string(),
+        }],
+    }
+}
+
+#[test]
+fn should_record_the_thread_revision_without_refetching_on_the_first_tick() {
+    let mut app = thread_revision_app(None, 7);
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::SyncLocalPrThreads(
+            Duration::from_millis(500),
+            ReviewThreadsRevision::new(7)
+        )
+    );
+    app.poll_diff_watch_changes();
+
+    assert_eq!(app.pr_threads_revision, Some(ReviewThreadsRevision::new(7)));
+    assert!(app.pr_threads_rx.is_none());
+    assert!(!app.forge_review_threads_loading);
+}
+
+#[test]
+fn should_refresh_threads_in_place_when_the_store_revision_moves() {
+    let mut app = thread_revision_app(Some(7), 8);
+    app.forge_review_threads = vec![shown_thread()];
+
+    app.poll_diff_watch_changes();
+
+    assert_eq!(app.pr_threads_revision, Some(ReviewThreadsRevision::new(8)));
+    assert!(app.pr_threads_rx.is_some());
+    assert!(app.forge_review_threads_loading);
+    assert_eq!(app.forge_review_threads.len(), 1);
+    assert!(app.next_local_pr_follow_at > Instant::now());
+}
+
+#[test]
+fn should_leave_threads_alone_when_the_store_revision_is_unchanged() {
+    let app = thread_revision_app(Some(7), 7);
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::LocalPrUnchanged(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn should_prefer_following_the_head_over_refreshing_threads() {
+    let mut app = thread_revision_app(Some(7), 8);
+    app.forge_backend = Some(Box::new(HeadStatusBackend(
+        PullRequestHeadStatus::Open("new".to_string()),
+        Some(8),
+    )));
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::FollowLocalPr(Duration::from_millis(500))
+    );
+}
+
+#[test]
+fn should_defer_the_tick_while_a_thread_fetch_is_in_flight() {
+    let mut app = thread_revision_app(Some(7), 8);
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.pr_threads_rx = Some(rx);
+
+    assert_eq!(
+        app.diff_watch_tick(Instant::now()),
+        DiffWatchTick::Defer(Duration::from_millis(500))
+    );
 }
 
 /// Hunks are left empty: most of these tests never render content.
@@ -401,7 +512,10 @@ fn should_defer_local_pr_follow_during_submit_confirmation() {
 #[test]
 fn should_follow_deleted_local_branch_once() {
     let (mut app, _head) = local_follow_app();
-    app.forge_backend = Some(Box::new(HeadStatusBackend(PullRequestHeadStatus::Closed)));
+    app.forge_backend = Some(Box::new(HeadStatusBackend(
+        PullRequestHeadStatus::Closed,
+        None,
+    )));
 
     assert_eq!(
         app.diff_watch_tick(Instant::now()),

@@ -12,7 +12,8 @@ Scenario (mirrors docs/LOCAL_FORGE.md "Judged by"):
   2. `tuicr pr` on the feature branch opens local PR #1 (session slug local:…)
   3. add a line comment                        -> threads.json on save (no review record);
      `:submit approve`                         -> reviews.json with the verdict
-  4. amend the branch tip in another process   -> auto-follow reloads at the new head
+  4. reply from another process (`review reply`) -> the follow tick renders it without `:e`;
+     amend the branch tip in another process   -> auto-follow reloads at the new head
   5. thread still listed (re-anchored)         -> `:resolve`
   6. `:comments unresolved` hides it, `:comments all` shows it
   7. plain `tuicr` -> Pull Requests tab -> `l` -> local branch row -> Enter opens local PR #1
@@ -166,6 +167,17 @@ def main():
         check(len(reviews) == 1 and reviews[0]["event"] == "APPROVE", "reviews.json written by :submit approve")
         check(len(load_threads(threads_path)) == 1, "the verdict left the thread alone")
 
+        print("== agent reply shows up without :e (thread auto-refresh)")
+        slug = "local:smoke-org/smoke-repo/pr/1"
+        sh(repo, options.tuicr, "review", "reply", "--session", slug, "--thread", threads[0]["id"], "--username", "Agent", "auto-refreshed reply", env=env)
+        arrived = False
+        for _ in range(16):                      # follow tick polls every 1s; the fetch lands shortly after
+            tui.pump(0.5)
+            if "auto-refreshed reply" in screen_text(tui.output):
+                arrived = True
+                break
+        check(arrived, "agent reply rendered by the follow tick without :e")
+
         print("== amend the branch tip while tuicr is open (auto-follow)")
         head_before = sh(repo, "git", "rev-parse", "HEAD")
         with open(os.path.join(repo, "README.md"), "a") as handle:
@@ -261,9 +273,9 @@ def main():
         check(comments.startswith("["), "review comments --session local:… resolves")
 
         print("== tuicr review reply / edit / delete")
-        slug = "local:smoke-org/smoke-repo/pr/1"
         thread_id = load_threads(threads_path)[0]["id"]
         stamp_before = load_threads(threads_path)[0]["updated_at"]
+        comments_before = len(load_threads(threads_path)[0]["comments"])
         reply = json.loads(sh(repo, options.tuicr, "review", "reply", "--session", slug, "--thread", thread_id, "--username", "Agent", "on it", env=env))
         edited = json.loads(sh(repo, options.tuicr, "review", "edit", "--session", slug, "--thread", thread_id, "--comment", reply["id"], "--username", "Agent", "done in abc1234", env=env))
         check(edited["body"] == "done in abc1234" and edited["updated_at"], "review edit amends the agent reply and stamps updated_at")
@@ -271,7 +283,7 @@ def main():
         check(foreign.returncode == 1 and "only its author" in foreign.stderr, "review edit refuses another author's comment with exit 1")
         deleted = json.loads(sh(repo, options.tuicr, "review", "delete", "--session", slug, "--thread", thread_id, "--comment", reply["id"], "--username", "Agent", env=env))
         check(deleted["comment_id"] == reply["id"] and deleted["thread_deleted"] is False, "review delete removes the reply and keeps the thread")
-        check(len(load_threads(threads_path)[0]["comments"]) == 1, "thread keeps its root after the reply is deleted")
+        check(len(load_threads(threads_path)[0]["comments"]) == comments_before, "thread keeps its earlier comments after the reply is deleted")
         check(load_threads(threads_path)[0]["updated_at"] > stamp_before, "thread updated_at moved with the reply, edit, and delete")
     finally:
         try:

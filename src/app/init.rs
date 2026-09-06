@@ -561,6 +561,7 @@ impl App {
             pr_submit_state: None,
             pr_submit_rx: None,
             current_pr_head: None,
+            pr_threads_revision: None,
             pr_info: None,
             show_pr_checks: false,
             show_pr_comments: true,

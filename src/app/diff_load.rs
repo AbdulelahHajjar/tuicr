@@ -1052,6 +1052,15 @@ impl App {
             DiffWatchTick::LocalPrUnchanged(interval) => {
                 self.next_local_pr_follow_at = now + interval;
             }
+            DiffWatchTick::SyncLocalPrThreads(interval, revision) => {
+                self.next_local_pr_follow_at = now + interval;
+                // The first sample after opening only records where the
+                // store stands; the open itself fetched those threads.
+                let first_sample = self.pr_threads_revision.replace(revision).is_none();
+                if !first_sample {
+                    self.refresh_pr_threads_in_place();
+                }
+            }
         }
         redraw
     }
@@ -1074,6 +1083,7 @@ impl App {
                 || self.pr_reload_state.is_some()
                 || self.pr_submit_state.is_some()
                 || self.pr_range_reload_state.is_some()
+                || self.pr_threads_rx.is_some()
             {
                 return DiffWatchTick::Defer(interval);
             }
@@ -1112,7 +1122,12 @@ impl App {
                     DiffWatchTick::FollowLocalPr(interval)
                 }
                 Ok(None | Some(crate::forge::traits::PullRequestHeadStatus::Open(_))) | Err(_) => {
-                    DiffWatchTick::LocalPrUnchanged(interval)
+                    match backend.review_threads_revision(&details) {
+                        Ok(Some(revision)) if self.pr_threads_revision != Some(revision) => {
+                            DiffWatchTick::SyncLocalPrThreads(interval, revision)
+                        }
+                        _ => DiffWatchTick::LocalPrUnchanged(interval),
+                    }
                 }
             };
         }
@@ -1633,6 +1648,9 @@ pub(in crate::app) enum DiffWatchTick {
     Fetch(Duration),
     FollowLocalPr(Duration),
     LocalPrUnchanged(Duration),
+    /// The head is unchanged but the thread store moved: record the marker
+    /// and re-fetch the threads in place.
+    SyncLocalPrThreads(Duration, crate::forge::traits::ReviewThreadsRevision),
 }
 
 /// True when a landed diff-watch result should be discarded rather than

@@ -374,6 +374,30 @@ impl LocalForgeStore {
         })
     }
 
+    /// A marker for the state of the pull's thread file, cheap enough to
+    /// poll: a hash of its modification time and length. Writes go through a
+    /// temp file and a rename, so every write yields a fresh marker; an
+    /// absent file has a marker of its own.
+    pub(crate) fn threads_revision(&self, number: u64) -> Result<u64> {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        match fs::metadata(self.threads_path(number)) {
+            Ok(metadata) => {
+                let modified = metadata
+                    .modified()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or(0);
+                (modified, metadata.len()).hash(&mut hasher);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                "absent".hash(&mut hasher);
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(hasher.finish())
+    }
+
     fn pulls_path(&self) -> PathBuf {
         self.root.join("pulls.json")
     }
@@ -840,6 +864,27 @@ mod tests {
         let threads = store.threads(1).unwrap();
 
         assert_eq!(threads[0].updated_at, Some(threads[0].created_at));
+    }
+
+    #[test]
+    fn should_change_threads_revision_on_every_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalForgeStore::at(temp.path().join("store"));
+        let absent = store.threads_revision(1).unwrap();
+
+        store
+            .add_thread(1, commented_thread("t", &["user"]))
+            .unwrap();
+        let created = store.threads_revision(1).unwrap();
+        let unchanged = store.threads_revision(1).unwrap();
+        store
+            .reply_to_thread(1, "t", "Claude Fable", "on it")
+            .unwrap();
+        let replied = store.threads_revision(1).unwrap();
+
+        assert_ne!(absent, created);
+        assert_eq!(created, unchanged);
+        assert_ne!(created, replied);
     }
 
     #[test]

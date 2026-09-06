@@ -471,6 +471,17 @@ pub struct CreateReviewRequest<'a> {
     pub comments: &'a [crate::forge::submit::InlineComment],
 }
 
+/// Opaque marker for the state of a pull request's review threads. Two equal
+/// markers mean nothing changed; the value carries no other meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReviewThreadsRevision(u64);
+
+impl ReviewThreadsRevision {
+    pub fn new(token: u64) -> Self {
+        Self(token)
+    }
+}
+
 /// Request to open one review thread directly, outside any review.
 #[derive(Debug, Clone)]
 pub struct CreateThreadRequest<'a> {
@@ -586,6 +597,15 @@ pub trait ForgeBackend {
     fn get_pull_request_diff(&self, pr: &PullRequestDetails) -> Result<Vec<FilePatch>>;
     /// Return the current head state when this backend supports live following.
     fn head_status(&self, _pr: &PullRequestDetails) -> Result<Option<PullRequestHeadStatus>> {
+        Ok(None)
+    }
+    /// A marker that moves whenever the pull request's review threads change,
+    /// for backends that can answer cheaply enough to poll. `Ok(None)` (the
+    /// default) means the backend cannot tell, so threads refresh on demand only.
+    fn review_threads_revision(
+        &self,
+        _pr: &PullRequestDetails,
+    ) -> Result<Option<ReviewThreadsRevision>> {
         Ok(None)
     }
     /// Fetch the requested file lines from the forge for context expansion.

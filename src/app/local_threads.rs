@@ -47,6 +47,15 @@ impl App {
         }
     }
 
+    /// Re-fetch the open pull request's threads while keeping the current
+    /// rows on screen until the result lands, so a background refresh never
+    /// blanks the thread boxes the way `:e` briefly does.
+    pub(in crate::app) fn refresh_pr_threads_in_place(&mut self) {
+        let shown = std::mem::take(&mut self.forge_review_threads);
+        self.refetch_pr_threads();
+        self.forge_review_threads = shown;
+    }
+
     /// True when the diff cursor is on a thread row of a Local pull request,
     /// where threads can be edited and deleted by their author.
     pub fn cursor_on_local_thread(&self) -> bool {

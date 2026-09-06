@@ -19,6 +19,7 @@ use crate::forge::traits::{
     GhCreateReviewResponse, PagedPullRequests, PullRequestCommit, PullRequestDetails,
     PullRequestHeadStatus, PullRequestInfo, PullRequestListQuery, PullRequestReviewMetadata,
     PullRequestReviewRecord, PullRequestReviewStatus, PullRequestSummary, PullRequestTarget,
+    ReviewThreadsRevision,
 };
 use crate::model::{DiffFile, DiffLine, FilePatch};
 use crate::syntax::SyntaxHighlighter;
@@ -485,6 +486,15 @@ impl ForgeBackend for LocalForgeBackend {
 
     fn local_checkout_path(&self) -> Option<PathBuf> {
         self.checkout.clone()
+    }
+
+    fn review_threads_revision(
+        &self,
+        pr: &PullRequestDetails,
+    ) -> Result<Option<ReviewThreadsRevision>> {
+        Ok(Some(ReviewThreadsRevision::new(
+            self.store()?.threads_revision(pr.number)?,
+        )))
     }
 
     fn create_review(
@@ -1321,6 +1331,37 @@ mod tests {
         assert_eq!(
             delete.to_string(),
             "Cannot update a closed local pull request"
+        );
+    }
+
+    #[test]
+    fn should_report_a_thread_revision_that_moves_with_the_store() {
+        let fixture = Fixture::new();
+        let details = fixture.details();
+        let path = PathBuf::from("file.txt");
+        let before = fixture
+            .backend
+            .review_threads_revision(&details)
+            .unwrap()
+            .unwrap();
+
+        fixture
+            .backend
+            .create_thread(
+                &details,
+                thread_request(&path, 2, GhSide::Right, None, &details.head_sha, None),
+            )
+            .unwrap();
+        let after = fixture
+            .backend
+            .review_threads_revision(&details)
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(before, after);
+        assert_eq!(
+            Some(after),
+            fixture.backend.review_threads_revision(&details).unwrap()
         );
     }
 
