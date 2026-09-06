@@ -1308,6 +1308,10 @@ pub struct App {
     /// Thread-store marker the follow tick last saw for the open Local pull
     /// request; `None` until the first tick samples it.
     pub pr_threads_revision: Option<crate::forge::traits::ReviewThreadsRevision>,
+    /// View captured before a head-follow reload, with the head it was
+    /// captured at. Threads land after that reload has restored the cursor,
+    /// so the landing consumes this to put the view back, thread row and all.
+    pub pending_view_anchor: Option<(String, view_anchor::ViewAnchor)>,
     /// Extended PR metadata rendered at the top of the diff view. Populated in PR mode.
     pub pr_info: Option<crate::forge::traits::PullRequestInfo>,
     /// Whether pull-request CI checks are fetched and rendered. Defaults to
@@ -1841,6 +1845,7 @@ pub mod sessions_tab;
 mod submit;
 mod thread_resolution;
 mod tree;
+mod view_anchor;
 mod visual;
 
 #[cfg(test)]

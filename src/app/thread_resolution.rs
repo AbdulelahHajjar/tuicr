@@ -60,14 +60,12 @@ impl App {
             .ok_or_else(|| TuicrError::UnsupportedOperation("Not in PR mode".to_string()))?;
         backend.resolve_thread(&details, &thread_id, resolved)?;
         self.forge_review_threads[thread_idx].is_resolved = resolved;
-        self.rebuild_annotations();
+        self.rebuild_annotations_keeping_view();
         let navigator_items = self.build_comment_navigator_items();
         self.sync_comment_navigator_selection(&navigator_items);
         if navigator_items.is_empty() && self.focused_panel == FocusedPanel::Comments {
             self.focused_panel = FocusedPanel::Diff;
         }
-        self.diff_state.cursor_line = self.diff_state.cursor_line.min(self.max_cursor_line());
-        self.ensure_cursor_visible();
         self.set_message(if resolved {
             "Thread resolved"
         } else {

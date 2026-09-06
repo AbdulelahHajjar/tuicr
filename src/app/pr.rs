@@ -105,7 +105,7 @@ impl App {
     /// land back here after `:e` rebuilds the diff. Returns `None` when
     /// the cursor isn't on a diff line (e.g., it's on a header / comment
     /// / hunk header / expander).
-    fn capture_pr_cursor_anchor(&self) -> Option<PrCursorAnchor> {
+    pub(in crate::app) fn capture_pr_cursor_anchor(&self) -> Option<PrCursorAnchor> {
         let annotation = self.line_annotations.get(self.diff_state.cursor_line)?;
         let (file_idx, old_lineno, new_lineno) = match annotation {
             AnnotatedLine::DiffLine {
@@ -125,6 +125,10 @@ impl App {
                 let file_idx = gap_id.file_idx;
                 (file_idx, None, None)
             }
+            AnnotatedLine::RemoteThreadLine { thread_idx } => {
+                let thread = self.forge_review_threads.get(*thread_idx)?;
+                return Some(super::view_anchor::thread_line_anchor(thread));
+            }
             _ => {
                 let file_idx = annotation_file_idx(annotation)?;
                 (file_idx, None, None)
@@ -143,7 +147,7 @@ impl App {
     /// exact `(path, new_lineno)` if it still exists, else the same
     /// `(path, old_lineno)` on the LEFT side, else the file's first
     /// annotation, else stay at line 0.
-    fn restore_pr_cursor_to_anchor(&mut self, anchor: &PrCursorAnchor) {
+    pub(in crate::app) fn restore_pr_cursor_to_anchor(&mut self, anchor: &PrCursorAnchor) {
         let mut best: Option<usize> = None;
         let mut file_first: Option<usize> = None;
         for (idx, ann) in self.line_annotations.iter().enumerate() {
@@ -413,6 +417,10 @@ impl App {
         use crate::vcs::diff_parser::parse_file_patches;
 
         let highlighter = self.theme.syntax_highlighter();
+        // A request without an anchor was captured off any file row (the
+        // range fired from a fresh open); the current view is the best
+        // guide to where the cursor should land on the range diff.
+        let view = request.anchor.is_none().then(|| self.capture_view_anchor());
         let local_checkout = self
             .forge_backend
             .as_deref()
@@ -440,6 +448,8 @@ impl App {
 
         if let Some(anchor) = &request.anchor {
             self.restore_pr_cursor_to_anchor(anchor);
+        } else if let Some(view) = &view {
+            self.restore_view_anchor(view);
         }
         Ok(())
     }
@@ -1143,6 +1153,7 @@ impl App {
                 if !still_relevant {
                     return;
                 }
+                let view = self.view_anchor_for_rebuild();
                 let mut had_error = false;
                 let mut threads_loaded = false;
                 match threads {
@@ -1177,6 +1188,7 @@ impl App {
                     let _ = self.save_current_session_merging_external();
                 }
                 self.rebuild_annotations();
+                self.restore_view_anchor(&view);
             }
         }
     }
@@ -1191,7 +1203,7 @@ impl App {
             return false;
         }
         self.session.remote_comments_visibility = visibility;
-        self.rebuild_annotations();
+        self.rebuild_annotations_keeping_view();
         true
     }
 

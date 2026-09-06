@@ -562,6 +562,7 @@ impl App {
             pr_submit_rx: None,
             current_pr_head: None,
             pr_threads_revision: None,
+            pending_view_anchor: None,
             pr_info: None,
             show_pr_checks: false,
             show_pr_comments: true,

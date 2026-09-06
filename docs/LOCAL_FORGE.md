@@ -251,6 +251,20 @@ submit or reload runs. This process's own writes move the marker too and cost
 one background re-read. `local_pr_follow_interval_ms = 0` disables following
 and refreshing alike; `:e` remains the manual path.
 
+Every rebuild that can insert or remove rows above the cursor — threads
+landing after a reload or a refresh, a thread hidden by `:comments`, a thread
+saved, resolved, edited, or deleted, a range diff replacing the view — is
+bracketed by a *view anchor* (`app/view_anchor.rs`), captured before the
+thread list or the rows change and restored after the rebuild. The anchor
+names the cursor's target (a diff line by path and line numbers, a thread
+by id plus the row inside its block with the thread's own line as fallback, or
+an overview row by index) together with the cursor's distance from the top of
+the viewport, rebuilds, and lands back on the same thing at the same screen
+row. A head-follow reload captures the view before it starts and hands it to
+the thread landing that follows, keyed by the head it was captured at, so the
+cursor returns to the thread row it was on rather than to the diff line under
+it. `:e` gains the thread-row anchor as well.
+
 ## `:resolve` / `:unresolve`
 
 Command-mode commands (`CommandKind::ResolveThread(bool)`) available in PR
@@ -339,6 +353,7 @@ coverage (not exhaustive):
 - `:resolve`/`:unresolve` parse + app behaviour with a fake backend (navigator selection, cursor on thread row, cursor on anchored line, nothing at cursor, unsupported forge)
 - auto-follow tick: moved head → reload spawned once; no double spawn while in flight; disabled at `0`
 - `tuicr review list --repo <checkout>` lists a local PR session; `--session local:…` resolves
+- view anchoring: threads landing above the cursor keep it on its diff line and at its screen row; a refetch lands back on the same thread row; a vanished thread falls back to its line; a carried anchor is honoured only after the head moved and dropped otherwise; the follow tick carries the view; a reload started from a thread row anchors on the thread's line
 - thread auto-refresh: store `threads_revision` differs across writes and for an absent file; the follow tick records the first sample without a fetch, re-fetches in place (rows kept) when the marker moves, reports unchanged when it matches, prefers a head move, and defers while a thread fetch is in flight
 - direct threads: store `add_thread` keeps `review_id` null and older numeric files still load; backend `create_thread` snapshots `line_text` (full diff and commit subset), stamps the requested author, rejects a closed pull and a path outside the diff
 - TUI save on a Local pull request: line and range comments call `create_thread` with the displayed diff's SHAs and leave no draft; file-level, GitHub, and closed-pull saves still draft; a failed write keeps the comment box open

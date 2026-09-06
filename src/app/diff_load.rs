@@ -1045,8 +1045,16 @@ impl App {
             }
             DiffWatchTick::FollowLocalPr(interval) => {
                 self.next_local_pr_follow_at = now + interval;
-                if let Err(error) = self.spawn_pr_reload() {
-                    self.set_error(format!("Reload failed: {error}"));
+                // Threads land after the reload has restored the cursor from
+                // its line anchor; carrying the full view lets that landing
+                // put the cursor back on a thread row too.
+                let view = self.capture_view_anchor();
+                match self.spawn_pr_reload() {
+                    Ok(()) => {
+                        self.pending_view_anchor =
+                            self.current_pr_head.clone().map(|head| (head, view));
+                    }
+                    Err(error) => self.set_error(format!("Reload failed: {error}")),
                 }
             }
             DiffWatchTick::LocalPrUnchanged(interval) => {

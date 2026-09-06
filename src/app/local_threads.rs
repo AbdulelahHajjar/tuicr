@@ -110,14 +110,12 @@ impl App {
         if thread_deleted {
             self.forge_review_threads.remove(thread_idx);
         }
-        self.rebuild_annotations();
+        self.rebuild_annotations_keeping_view();
         let items = self.build_comment_navigator_items();
         self.sync_comment_navigator_selection(&items);
         if items.is_empty() && self.focused_panel == FocusedPanel::Comments {
             self.focused_panel = FocusedPanel::Diff;
         }
-        self.diff_state.cursor_line = self.diff_state.cursor_line.min(self.max_cursor_line());
-        self.ensure_cursor_visible();
         self.set_message("Thread deleted");
         Ok(())
     }
@@ -180,7 +178,7 @@ impl App {
         {
             comment.body = content.to_string();
         }
-        self.rebuild_annotations();
+        self.rebuild_annotations_keeping_view();
         Ok(())
     }
 
@@ -232,10 +230,9 @@ impl App {
         } else {
             self.forge_review_threads.push(thread);
         }
-        self.rebuild_annotations();
+        self.rebuild_annotations_keeping_view();
         let items = self.build_comment_navigator_items();
         self.sync_comment_navigator_selection(&items);
-        self.ensure_cursor_visible();
         Ok(line)
     }
 }

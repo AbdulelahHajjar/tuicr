@@ -141,6 +141,7 @@ Repository-managed agent integrations:
 - Methods: `scroll_down/up`, `next/prev_file`, `next/prev_hunk`, `go_to_source_line`, `toggle_reviewed`, `save_comment`, `jump_to_pr_info`
 - Diff search state lives on `App` (`search_matches`, `search_highlight_visible`, see `app/search.rs`); rendering patches `theme.search_match_bg` over content spans via `ui::text_utils::apply_search_highlight_*`
 - Comment navigation uses `CommentNavigatorState` plus `CommentNavigatorItem` rows derived from `line_annotations`, so local comments and visible remote PR threads jump to the same annotations the diff renders.
+- `line_annotations` is rebuilt often and the cursor is a row index into it. Rebuilds that can shift rows above the cursor go through `rebuild_annotations_keeping_view` (`app/view_anchor.rs`), which re-lands the cursor on the same diff line or thread row at the same screen row; a head-follow reload carries its pre-reload view to the thread landing via `pending_view_anchor`.
 
 **VcsBackend** (`src/vcs/traits.rs`):
 

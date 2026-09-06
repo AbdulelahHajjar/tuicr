@@ -470,6 +470,21 @@ fn should_spawn_exactly_one_local_pr_reload_when_head_moves() {
 }
 
 #[test]
+fn should_carry_the_view_across_a_head_follow_reload() {
+    let (mut app, _head) = local_follow_app();
+
+    app.poll_diff_watch_changes();
+
+    assert!(app.pr_reload_state.is_some());
+    assert_eq!(
+        app.pending_view_anchor
+            .as_ref()
+            .map(|(head, _)| head.as_str()),
+        Some("old")
+    );
+}
+
+#[test]
 fn should_not_follow_local_pr_while_reload_is_in_flight() {
     let (mut app, _head) = local_follow_app();
     app.pr_reload_state = Some(PrReloadRequest {

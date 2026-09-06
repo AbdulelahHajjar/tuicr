@@ -3482,6 +3482,185 @@ fn should_keep_thread_rows_read_only_outside_local_pull_requests() {
     assert_eq!(app.input_mode, InputMode::Normal);
 }
 
+/// Deliver a finished thread fetch for the open PR, as the background
+/// worker would.
+fn deliver_threads(app: &mut App, threads: Vec<RemoteReviewThread>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.pr_threads_rx = Some(rx);
+    app.forge_review_threads_loading = true;
+    let key = match &app.diff_source {
+        DiffSource::PullRequest(pr) => pr.key.clone(),
+        _ => panic!("expected PR mode"),
+    };
+    tx.send(crate::app::PrThreadsEvent::Done {
+        repository: key.repository.clone(),
+        pr_number: key.number,
+        head_sha: key.head_sha.clone(),
+        threads: Ok(threads),
+        summaries: Ok(Vec::new()),
+    })
+    .unwrap();
+    app.poll_pr_threads_events();
+}
+
+fn thread_with_reply(id: &str, line: u32) -> RemoteReviewThread {
+    let mut thread = sample_thread(line, "root", false, false);
+    thread.id = id.to_string();
+    thread.comments.push(RemoteReviewComment {
+        id: format!("{id}-reply"),
+        author: Some("Claude Fable".to_string()),
+        body: "reply".to_string(),
+        created_at: None,
+        in_reply_to: Some("C".to_string()),
+        url: format!("local:owner/project/pull/42#comment-{id}-reply"),
+    });
+    thread
+}
+
+fn thread_rows(app: &App, id: &str) -> Vec<usize> {
+    app.line_annotations
+        .iter()
+        .enumerate()
+        .filter_map(|(row, line)| match line {
+            AnnotatedLine::RemoteThreadLine { thread_idx }
+                if app.forge_review_threads[*thread_idx].id == id =>
+            {
+                Some(row)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn cursor_new_lineno(app: &App) -> Option<u32> {
+    match app.line_annotations.get(app.diff_state.cursor_line) {
+        Some(AnnotatedLine::DiffLine { new_lineno, .. }) => *new_lineno,
+        _ => None,
+    }
+}
+
+fn view_anchor_app(threads: Vec<RemoteReviewThread>) -> App {
+    let mut app = build_app();
+    let backend = ThreadAwareForgeBackend::new(
+        local_pr_details(42, "answer"),
+        crate::forge::github::gh::tests_fixture::SIMPLE_PATCH.to_string(),
+        threads,
+    );
+    app.open_pr_with_backend(&local_sample_pr(42, "answer"), Box::new(backend), None)
+        .unwrap();
+    app
+}
+
+#[test]
+fn should_keep_the_cursor_on_its_diff_line_when_threads_land() {
+    let mut app = view_anchor_app(Vec::new());
+    move_cursor_to_new_line(&mut app, 3);
+    let before = app.diff_state.cursor_line;
+
+    let mut above = sample_thread(1, "above", false, false);
+    above.id = "A".to_string();
+    let mut also_above = sample_thread(1, "also above", false, false);
+    also_above.id = "B".to_string();
+    deliver_threads(&mut app, vec![above, also_above]);
+
+    assert_eq!(cursor_new_lineno(&app), Some(3));
+    assert!(
+        app.diff_state.cursor_line > before,
+        "thread rows were inserted above"
+    );
+}
+
+#[test]
+fn should_return_to_the_same_thread_row_when_threads_are_refetched() {
+    let mut app = view_anchor_app(vec![thread_with_reply("T", 2)]);
+    app.diff_state.cursor_line = thread_rows(&app, "T")[1];
+
+    let mut above = sample_thread(1, "above", false, false);
+    above.id = "A".to_string();
+    deliver_threads(&mut app, vec![above, thread_with_reply("T", 2)]);
+
+    assert_eq!(app.diff_state.cursor_line, thread_rows(&app, "T")[1]);
+}
+
+#[test]
+fn should_fall_back_to_the_anchored_line_when_the_thread_is_gone() {
+    let mut app = view_anchor_app(vec![thread_with_reply("T", 2)]);
+    app.diff_state.cursor_line = thread_rows(&app, "T")[0];
+
+    deliver_threads(&mut app, Vec::new());
+
+    assert_eq!(cursor_new_lineno(&app), Some(2));
+}
+
+#[test]
+fn should_keep_the_screen_row_across_a_rebuild() {
+    let mut app = view_anchor_app(Vec::new());
+    app.diff_state.viewport_height = 4;
+    app.diff_state.visible_line_count = 4;
+    move_cursor_to_new_line(&mut app, 3);
+    app.diff_state.scroll_offset = app.diff_state.cursor_line - 1;
+
+    let mut above = sample_thread(1, "above", false, false);
+    above.id = "A".to_string();
+    deliver_threads(&mut app, vec![above]);
+
+    assert_eq!(cursor_new_lineno(&app), Some(3));
+    assert_eq!(app.diff_state.cursor_line - app.diff_state.scroll_offset, 1);
+}
+
+#[test]
+fn should_land_on_the_carried_thread_row_once_the_head_has_moved() {
+    let mut app = view_anchor_app(vec![thread_with_reply("T", 2)]);
+    app.diff_state.cursor_line = thread_rows(&app, "T")[1];
+    let view = app.capture_view_anchor();
+    app.pending_view_anchor = Some(("old-head".to_string(), view));
+    // A head-follow reload rebuilt the rows without threads and left the
+    // cursor at the top.
+    app.forge_review_threads.clear();
+    app.rebuild_annotations();
+    app.diff_state.cursor_line = 0;
+    app.current_pr_head = Some("moved".to_string());
+
+    deliver_threads(&mut app, vec![thread_with_reply("T", 2)]);
+
+    assert_eq!(app.diff_state.cursor_line, thread_rows(&app, "T")[1]);
+    assert!(app.pending_view_anchor.is_none());
+}
+
+#[test]
+fn should_drop_a_carried_view_when_the_head_did_not_move() {
+    let mut app = view_anchor_app(vec![thread_with_reply("T", 2)]);
+    app.diff_state.cursor_line = thread_rows(&app, "T")[1];
+    let view = app.capture_view_anchor();
+    app.pending_view_anchor = Some(("old-head".to_string(), view));
+    app.current_pr_head = Some("old-head".to_string());
+    move_cursor_to_new_line(&mut app, 3);
+
+    deliver_threads(&mut app, vec![thread_with_reply("T", 2)]);
+
+    assert_eq!(cursor_new_lineno(&app), Some(3));
+    assert!(app.pending_view_anchor.is_none());
+}
+
+#[test]
+fn should_anchor_a_reload_on_the_thread_line_when_the_cursor_is_on_a_thread_row() {
+    let mut app = view_anchor_app(vec![thread_with_reply("T", 2)]);
+    app.diff_state.cursor_line = thread_rows(&app, "T")[1];
+
+    app.spawn_pr_reload().unwrap();
+
+    let anchor = app
+        .pr_reload_state
+        .as_ref()
+        .unwrap()
+        .anchor
+        .clone()
+        .unwrap();
+    assert_eq!(anchor.path, PathBuf::from("src/lib.rs"));
+    assert_eq!(anchor.new_lineno, Some(2));
+    assert_eq!(anchor.old_lineno, None);
+}
+
 #[test]
 fn should_preserve_unsupported_forge_resolution_error() {
     use crate::handler::handle_command_action;
