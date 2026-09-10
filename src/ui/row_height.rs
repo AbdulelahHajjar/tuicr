@@ -626,6 +626,7 @@ mod tests {
             url: "https://example.com/review".to_string(),
         }];
         app.forge_review_threads = vec![RemoteReviewThread {
+            start_line: None,
             id: "thread-1".to_string(),
             path: "src/lib.rs".to_string(),
             line: Some(31),

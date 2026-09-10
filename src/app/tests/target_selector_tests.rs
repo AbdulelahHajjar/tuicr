@@ -2720,6 +2720,7 @@ type EditCalls = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreatedThreadCall {
+    start_line: Option<u32>,
     path: String,
     line: u32,
     side: crate::forge::submit::GhSide,
@@ -2933,6 +2934,7 @@ impl crate::forge::traits::ForgeBackend for ThreadAwareForgeBackend {
         let mut calls = self.create_calls.borrow_mut();
         let id = format!("new-{}", calls.len() + 1);
         calls.push(CreatedThreadCall {
+            start_line: request.start_line,
             path: request.path.to_string_lossy().into_owned(),
             line: request.line,
             side: request.side,
@@ -2942,6 +2944,7 @@ impl crate::forge::traits::ForgeBackend for ThreadAwareForgeBackend {
             diff_start_sha: request.diff_start_sha.map(str::to_string),
         });
         Ok(RemoteReviewThread {
+            start_line: request.start_line,
             id: id.clone(),
             path: request.path.to_string_lossy().into_owned(),
             line: Some(request.line),
@@ -2965,6 +2968,7 @@ impl crate::forge::traits::ForgeBackend for ThreadAwareForgeBackend {
 
 fn sample_thread(line: u32, body: &str, resolved: bool, outdated: bool) -> RemoteReviewThread {
     RemoteReviewThread {
+        start_line: None,
         id: "T".to_string(),
         path: "src/lib.rs".to_string(),
         line: Some(line),
@@ -3228,6 +3232,7 @@ fn should_create_local_thread_when_saving_line_comment_on_local_pr() {
     assert_eq!(
         &*calls.borrow(),
         &[CreatedThreadCall {
+            start_line: None,
             path: "src/lib.rs".to_string(),
             line: 2,
             side: crate::forge::submit::GhSide::Right,
@@ -3754,4 +3759,103 @@ fn should_discard_stale_remote_threads_event_after_switching_pr() {
     app.poll_pr_threads_events();
     // then — stale result was dropped
     assert!(app.forge_review_threads.is_empty());
+}
+
+#[test]
+fn should_inherit_thread_anchor_when_pressing_c_on_any_thread_row() {
+    for side in [RemoteCommentSide::Left, RemoteCommentSide::Right] {
+        for start_line in [None, Some(1)] {
+            let (mut app, calls) = threading_local_app();
+            app.forge_review_threads[0].side = side;
+            app.forge_review_threads[0].start_line = start_line;
+            app.rebuild_annotations();
+            let rows: Vec<_> = app
+                .line_annotations
+                .iter()
+                .enumerate()
+                .filter_map(|(index, row)| {
+                    matches!(row, AnnotatedLine::RemoteThreadLine { thread_idx: 0 })
+                        .then_some(index)
+                })
+                .collect();
+            assert!(!rows.is_empty());
+            for row in rows {
+                app.diff_state.cursor_line = row;
+                crate::handler::handle_diff_action(&mut app, crate::input::Action::AddLineComment);
+                let expected_side = match side {
+                    RemoteCommentSide::Left => LineSide::Old,
+                    RemoteCommentSide::Right => LineSide::New,
+                };
+                assert_eq!(app.input_mode, InputMode::Comment);
+                assert_eq!(app.comment_line, Some((2, expected_side)));
+                assert_eq!(
+                    app.comment_line_range,
+                    start_line.map(|start| (LineRange::new(start, 2), expected_side))
+                );
+                assert!(app.editing_thread.is_none());
+                assert!(app.comment_buffer.is_empty());
+                app.exit_comment_mode();
+            }
+            crate::handler::handle_diff_action(&mut app, crate::input::Action::AddLineComment);
+            app.comment_buffer = "another observation".to_string();
+            app.save_comment();
+            assert_eq!(calls.borrow().len(), 1);
+            assert_eq!(calls.borrow()[0].start_line, start_line);
+            assert_eq!(calls.borrow()[0].line, 2);
+            assert_eq!(calls.borrow()[0].path, "src/lib.rs");
+        }
+    }
+}
+
+#[test]
+fn should_not_inherit_outdated_or_unanchored_thread() {
+    for (line, outdated) in [(None, false), (Some(2), true)] {
+        let (mut app, _) = threading_local_app();
+        app.diff_state.cursor_line = app
+            .line_annotations
+            .iter()
+            .position(|row| matches!(row, AnnotatedLine::RemoteThreadLine { .. }))
+            .unwrap();
+        app.forge_review_threads[0].line = line;
+        app.forge_review_threads[0].is_outdated = outdated;
+        crate::handler::handle_diff_action(&mut app, crate::input::Action::AddLineComment);
+        assert_eq!(app.input_mode, InputMode::Normal);
+    }
+}
+
+#[test]
+fn should_inherit_draft_comment_range_and_clear_it_for_a_diff_line() {
+    let (mut app, _) = threading_local_app();
+    move_cursor_to_new_line(&mut app, 2);
+    let path = app.current_file_path().unwrap().clone();
+    app.session
+        .files
+        .get_mut(&path)
+        .unwrap()
+        .line_comments
+        .insert(
+            2,
+            vec![crate::model::Comment::new_with_range(
+                "original".to_string(),
+                crate::model::CommentType::None,
+                Some(LineSide::New),
+                LineRange::new(1, 2),
+            )],
+        );
+    app.rebuild_annotations();
+    app.diff_state.cursor_line = app
+        .line_annotations
+        .iter()
+        .position(|row| matches!(row, AnnotatedLine::LineComment { .. }))
+        .unwrap();
+    crate::handler::handle_diff_action(&mut app, crate::input::Action::AddLineComment);
+    assert_eq!(
+        app.comment_line_range,
+        Some((LineRange::new(1, 2), LineSide::New))
+    );
+    app.exit_comment_mode();
+    move_cursor_to_new_line(&mut app, 2);
+    crate::handler::handle_diff_action(&mut app, crate::input::Action::AddLineComment);
+    assert_eq!(app.comment_line, Some((2, LineSide::New)));
+    assert_eq!(app.comment_line_range, None);
 }

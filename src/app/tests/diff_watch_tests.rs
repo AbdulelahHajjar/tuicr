@@ -216,6 +216,7 @@ fn thread_revision_app(seen: Option<u64>, store: u64) -> App {
 
 fn shown_thread() -> crate::forge::remote_comments::RemoteReviewThread {
     crate::forge::remote_comments::RemoteReviewThread {
+        start_line: None,
         id: "T".to_string(),
         path: "src/lib.rs".to_string(),
         line: Some(2),

@@ -136,6 +136,10 @@ fn add_comment(
             repository,
             number,
             LocalThreadInput {
+                start_line: match &request_parts.target {
+                    CommentTarget::LineRange { range, .. } => Some(range.start),
+                    _ => None,
+                },
                 path,
                 line,
                 side,
@@ -475,6 +479,7 @@ fn thread_anchor(target: &CommentTarget) -> Option<(PathBuf, u32, LineSide)> {
 }
 
 struct LocalThreadInput<'a> {
+    start_line: Option<u32>,
     path: PathBuf,
     line: u32,
     side: LineSide,
@@ -529,6 +534,7 @@ fn add_local_thread(
     backend.create_local_thread(
         &details,
         &CreateThreadRequest {
+            start_line: input.start_line,
             path: &input.path,
             line: input.line,
             side: GhSide::from(input.side),
@@ -925,6 +931,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = LocalForgeStore::at(dir.path());
         let thread = LocalThread {
+            original_start_line: None,
+            start_line_text: None,
             id: "t1".to_string(),
             path: "src/a.rs".to_string(),
             side: "new".to_string(),
@@ -1109,6 +1117,7 @@ mod tests {
 
         let printed: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(printed["original_line"], 2);
+        assert_eq!(printed["original_start_line"], 1);
         assert!(
             printed["comments"][0]["body"]
                 .as_str()

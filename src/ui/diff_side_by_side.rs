@@ -2294,6 +2294,7 @@ mod remote_comments_side_by_side_snapshot_tests {
 
     fn thread() -> RemoteReviewThread {
         RemoteReviewThread {
+            start_line: None,
             id: "T".to_string(),
             path: "src/lib.rs".to_string(),
             line: Some(2),

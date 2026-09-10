@@ -210,6 +210,7 @@ fn convert_thread(raw: GhReviewThread) -> RemoteReviewThread {
     let line = raw.line.or(raw.original_line);
 
     RemoteReviewThread {
+        start_line: None,
         id: raw.id,
         path: raw.path.unwrap_or_default(),
         line,

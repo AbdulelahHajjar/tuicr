@@ -49,6 +49,10 @@ pub(crate) struct LocalThreadComment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LocalThread {
+    #[serde(default)]
+    pub original_start_line: Option<u32>,
+    #[serde(default)]
+    pub start_line_text: Option<String>,
     pub id: String,
     pub path: String,
     pub side: String,
@@ -586,6 +590,8 @@ mod tests {
             .add_review(1, "PENDING", "draft", "aaaa", "author", Vec::new())
             .unwrap();
         let thread = LocalThread {
+            original_start_line: None,
+            start_line_text: None,
             id: "thread".to_string(),
             path: "src/lib.rs".to_string(),
             side: "RIGHT".to_string(),
@@ -646,6 +652,8 @@ mod tests {
 
     fn thread(id: &str) -> LocalThread {
         LocalThread {
+            original_start_line: None,
+            start_line_text: None,
             id: id.to_string(),
             path: "src/lib.rs".to_string(),
             side: "RIGHT".to_string(),

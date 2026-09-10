@@ -1611,6 +1611,7 @@ mod remote_comments_snapshot_tests {
         outdated: bool,
     ) -> RemoteReviewThread {
         RemoteReviewThread {
+            start_line: None,
             id: id.to_string(),
             path: "src/lib.rs".to_string(),
             line: Some(line),
@@ -1912,6 +1913,7 @@ mod remote_comments_snapshot_tests {
         // GitLab individual_note: true discussions
         let mut app = make_pr_app();
         app.forge_review_threads = vec![RemoteReviewThread {
+            start_line: None,
             id: "rv1".to_string(),
             path: String::new(),
             line: None,
@@ -1946,6 +1948,7 @@ mod remote_comments_snapshot_tests {
     fn should_not_render_review_level_thread_when_comments_hidden() {
         let mut app = make_pr_app();
         app.forge_review_threads = vec![RemoteReviewThread {
+            start_line: None,
             id: "rv1".to_string(),
             path: String::new(),
             line: None,

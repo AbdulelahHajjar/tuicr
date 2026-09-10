@@ -334,6 +334,7 @@ impl AzThread {
         };
 
         Some(RemoteReviewThread {
+            start_line: None,
             id: self.id.to_string(),
             path,
             line,

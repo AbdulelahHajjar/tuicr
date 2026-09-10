@@ -202,6 +202,10 @@ impl LocalForgeBackend {
             GhSide::Left => RemoteCommentSide::Left,
         };
         LocalThread {
+            original_start_line: request.start_line,
+            start_line_text: request
+                .start_line
+                .and_then(|line| anchor::line_text(files, request.path, side, line)),
             id: uuid::Uuid::new_v4().to_string(),
             path: request.path.to_string_lossy().replace('\\', "/"),
             side: request.side.as_str().to_string(),
@@ -240,6 +244,7 @@ impl LocalForgeBackend {
         thread: LocalThread,
         line: Option<u32>,
         is_outdated: bool,
+        start_line: Option<u32>,
     ) -> RemoteReviewThread {
         let root_id = thread.comments.first().map(|comment| comment.id.clone());
         let comments = thread
@@ -256,6 +261,7 @@ impl LocalForgeBackend {
             })
             .collect();
         RemoteReviewThread {
+            start_line,
             id: thread.id,
             path: thread.path,
             line,
@@ -275,6 +281,14 @@ impl LocalForgeBackend {
         if pr.is_read_only() {
             return Err(TuicrError::Forge(
                 "Cannot comment on a closed local pull request".to_string(),
+            ));
+        }
+        if request
+            .start_line
+            .is_some_and(|start| start == 0 || start > request.line)
+        {
+            return Err(TuicrError::InvalidInput(
+                "Invalid thread line range".to_string(),
             ));
         }
         let files = self.anchor_diff(pr, request.diff_start_sha, request.commit_id)?;
@@ -423,7 +437,21 @@ impl ForgeBackend for LocalForgeBackend {
             .into_iter()
             .map(|thread| {
                 let (line, is_outdated) = anchor::reanchor(&thread, &pr.head_sha, &files);
-                self.remote_thread(pr.number, thread, line, is_outdated)
+                let start_line = thread.original_start_line.and_then(|start| {
+                    let mut anchor = thread.clone();
+                    anchor.original_line = start;
+                    anchor.line_text = thread.start_line_text.clone().unwrap_or_default();
+                    anchor::reanchor(&anchor, &pr.head_sha, &files).0
+                });
+                let invalid_range = thread.original_start_line.is_some()
+                    && !matches!((start_line, line), (Some(start), Some(end)) if start <= end);
+                self.remote_thread(
+                    pr.number,
+                    thread,
+                    line,
+                    is_outdated || invalid_range,
+                    start_line,
+                )
             })
             .collect())
     }
@@ -517,6 +545,7 @@ impl ForgeBackend for LocalForgeBackend {
                 Self::new_thread(
                     &files,
                     &CreateThreadRequest {
+                        start_line: comment.start_line,
                         path: &comment.path,
                         line: comment.line,
                         side: comment.side,
@@ -592,7 +621,8 @@ impl ForgeBackend for LocalForgeBackend {
     ) -> Result<RemoteReviewThread> {
         let thread = self.create_local_thread(pr, &request)?;
         let line = Some(thread.original_line);
-        Ok(self.remote_thread(pr.number, thread, line, false))
+        let start_line = thread.original_start_line;
+        Ok(self.remote_thread(pr.number, thread, line, false, start_line))
     }
 }
 
@@ -1105,6 +1135,7 @@ mod tests {
         diff_start_sha: Option<&'a str>,
     ) -> CreateThreadRequest<'a> {
         CreateThreadRequest {
+            start_line: None,
             path,
             line,
             side,
@@ -1113,6 +1144,21 @@ mod tests {
             commit_id,
             diff_start_sha,
         }
+    }
+
+    #[test]
+    fn should_preserve_thread_range_after_reload() {
+        let fixture = Fixture::new();
+        let details = fixture.details();
+        let path = PathBuf::from("file.txt");
+        let mut request = thread_request(&path, 2, GhSide::Right, None, &details.head_sha, None);
+        request.start_line = Some(1);
+        let created = fixture.backend.create_thread(&details, request).unwrap();
+        assert_eq!(created.start_line, Some(1));
+        let reloaded = fixture.backend.list_review_threads(&details).unwrap();
+        assert_eq!(reloaded[0].start_line, Some(1));
+        assert_eq!(reloaded[0].line, Some(2));
+        assert!(!reloaded[0].is_outdated);
     }
 
     #[test]

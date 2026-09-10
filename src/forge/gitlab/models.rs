@@ -263,6 +263,7 @@ impl GlabDiscussion {
                 return None;
             }
             return Some(RemoteReviewThread {
+                start_line: None,
                 id: self.id,
                 path: String::new(),
                 line: None,
@@ -315,6 +316,7 @@ impl GlabDiscussion {
             .collect();
 
         Some(RemoteReviewThread {
+            start_line: None,
             id: self.id,
             path,
             line,

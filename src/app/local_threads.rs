@@ -214,6 +214,7 @@ impl App {
         let thread = backend.create_thread(
             &details,
             CreateThreadRequest {
+                start_line: self.comment_line_range.map(|(range, _)| range.start),
                 path: &path,
                 line,
                 side: side.into(),

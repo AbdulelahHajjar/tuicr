@@ -103,6 +103,8 @@ mod tests {
 
     fn thread(original_commit: &str, original_line: u32, text: &str) -> LocalThread {
         LocalThread {
+            original_start_line: None,
+            start_line_text: None,
             id: "thread".to_string(),
             path: "src/lib.rs".to_string(),
             side: "RIGHT".to_string(),

@@ -919,6 +919,55 @@ impl App {
         false
     }
 
+    /// Start a new comment using the code anchor of the selected row or thread.
+    pub fn add_line_comment_at_cursor(&mut self) {
+        let anchor = match self.line_annotations.get(self.diff_state.cursor_line) {
+            Some(AnnotatedLine::RemoteThreadLine { thread_idx }) => self
+                .forge_review_threads
+                .get(*thread_idx)
+                .and_then(|thread| {
+                    if thread.is_outdated {
+                        return None;
+                    }
+                    thread.line.map(|line| {
+                        let side = match thread.side {
+                            crate::forge::remote_comments::RemoteCommentSide::Left => LineSide::Old,
+                            crate::forge::remote_comments::RemoteCommentSide::Right => {
+                                LineSide::New
+                            }
+                        };
+                        (
+                            line,
+                            side,
+                            thread.start_line.map(|start| LineRange::new(start, line)),
+                        )
+                    })
+                }),
+            Some(AnnotatedLine::LineComment {
+                file_idx,
+                line,
+                side,
+                comment_idx,
+            }) => self
+                .diff_files
+                .get(*file_idx)
+                .and_then(|file| self.session.files.get(file.display_path()))
+                .and_then(|file| file.line_comments.get(line))
+                .and_then(|comments| comments.get(*comment_idx))
+                .map(|comment| (*line, *side, comment.line_range)),
+            _ => self
+                .get_line_at_cursor()
+                .map(|(line, side)| (line, side, None)),
+        };
+        if let Some((line, side, range)) = anchor {
+            self.enter_comment_mode(false, Some((line, side)));
+            self.comment_line_range = range.map(|range| (range, side));
+            self.focused_panel = FocusedPanel::Diff;
+        } else {
+            self.set_message("Move cursor to a diff line or an anchored line comment");
+        }
+    }
+
     pub fn enter_comment_mode(&mut self, file_level: bool, line: Option<(u32, LineSide)>) {
         self.input_mode = InputMode::Comment;
         if self.diff_view_mode != DiffViewMode::SideBySide {
@@ -930,6 +979,7 @@ impl App {
         self.comment_is_review_level = false;
         self.comment_is_file_level = file_level;
         self.comment_line = line;
+        self.comment_line_range = None;
     }
 
     pub fn enter_review_comment_mode(&mut self) {

@@ -322,7 +322,10 @@ pub fn format_remote_thread_lines(
     let border_style = Style::default().fg(border_fg);
     let body_style = Style::default().fg(body_fg);
 
-    let line_info = match thread.line.map(LineRange::single) {
+    let line_info = match thread
+        .line
+        .map(|end| LineRange::new(thread.start_line.unwrap_or(end), end))
+    {
         Some(range) if range.is_single() => format!("L{} ", range.start),
         Some(range) => format!("L{}-L{} ", range.start, range.end),
         None => String::new(),
@@ -1060,6 +1063,7 @@ mod tests {
     #[test]
     fn remote_thread_badge_uses_gitlab_for_gitlab_comments() {
         let thread = crate::forge::remote_comments::RemoteReviewThread {
+            start_line: None,
             id: "thread".to_string(),
             path: "src/lib.rs".to_string(),
             line: Some(1),

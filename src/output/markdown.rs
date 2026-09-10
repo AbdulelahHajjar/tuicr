@@ -1761,6 +1761,7 @@ mod tests {
     ) -> RemoteReviewThread {
         use crate::forge::remote_comments::{RemoteCommentSide, RemoteReviewComment};
         RemoteReviewThread {
+            start_line: None,
             id: id.to_string(),
             path: "src/lib.rs".to_string(),
             line: Some(line),

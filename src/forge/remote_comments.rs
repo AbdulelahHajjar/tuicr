@@ -106,6 +106,9 @@ pub struct RemoteReviewSummary {
 /// A discussion thread on a forge — one root comment plus zero or more replies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteReviewThread {
+    /// Start of an inclusive range on the same side as `line`.
+    #[serde(default)]
+    pub start_line: Option<u32>,
     /// Forge-assigned thread node ID.
     pub id: String,
     /// File path the thread anchors to.
@@ -268,6 +271,7 @@ mod tests {
         is_outdated: bool,
     ) -> RemoteReviewThread {
         RemoteReviewThread {
+            start_line: None,
             id: id.to_string(),
             path: path.to_string(),
             line,

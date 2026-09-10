@@ -485,6 +485,7 @@ impl ReviewThreadsRevision {
 /// Request to open one review thread directly, outside any review.
 #[derive(Debug, Clone)]
 pub struct CreateThreadRequest<'a> {
+    pub start_line: Option<u32>,
     pub path: &'a Path,
     pub line: u32,
     pub side: GhSide,

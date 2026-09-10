@@ -360,3 +360,7 @@ coverage (not exhaustive):
 - `tuicr review add` on a `local:` slug with a line target writes a thread (flags and `--input`), rejects a non-checkout `--repo` and a checkout of another repository, and still drafts for review-level targets and other forges
 - thread edits: store `update_thread_comment` stamps `updated_at` and `delete_thread_comment` removes an emptied thread; both refuse another author's comment and a root with replies cannot be deleted; the backend rejects a closed pull; TUI `dd` / `i` act on the viewer's own thread and keep the editor open on a failed write; `tuicr review edit` / `delete` address comments by id
 - regression: every existing test still passes; GitHub target parsing unchanged
+
+Line-range threads retain both endpoints when created in the TUI or CLI. Pressing `c`
+on a thread inherits its current anchor and diff side for a new comment. Older stored
+threads that contain only an ending line retain that single-line anchor.

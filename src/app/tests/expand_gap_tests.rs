@@ -1077,6 +1077,7 @@ fn total_lines_must_match_annotations_with_remote_threads() {
     app.sync_viewport_width(80);
 
     app.forge_review_threads = vec![RemoteReviewThread {
+        start_line: None,
         id: "T1".into(),
         path: "b.rs".into(),
         line: Some(1),
@@ -1192,6 +1193,7 @@ fn comment_navigator_items_follow_rendered_comment_order() {
             Some(LineSide::New),
         ));
     app.forge_review_threads = vec![RemoteReviewThread {
+        start_line: None,
         id: "T1".into(),
         path: "b.rs".into(),
         line: Some(2),
@@ -1318,6 +1320,7 @@ fn should_update_current_file_when_navigating_to_remote_comment() {
     ];
     let mut app = build_app_with_files(files, 10);
     app.forge_review_threads = vec![RemoteReviewThread {
+        start_line: None,
         id: "T1".into(),
         path: "b.rs".into(),
         line: Some(2),
@@ -1366,6 +1369,7 @@ fn should_rebuild_single_file_annotations_when_navigating_to_outdated_remote_com
     app.diff_state.current_file_idx = 0;
     app.session.remote_comments_visibility = PrCommentsVisibility::All;
     app.forge_review_threads = vec![RemoteReviewThread {
+        start_line: None,
         id: "T1".into(),
         path: "b.rs".into(),
         line: None,

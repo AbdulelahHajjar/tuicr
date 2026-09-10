@@ -460,6 +460,7 @@ pub fn group_into_review_threads(comments: Vec<BbComment>) -> Vec<RemoteReviewTh
             let is_resolved = comment.resolution.is_some();
             index_of_root.insert(root_id, threads.len());
             threads.push(RemoteReviewThread {
+                start_line: None,
                 id: comment.id.to_string(),
                 path,
                 line: Some(line),
