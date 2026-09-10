@@ -103,6 +103,9 @@ review when that metadata is available; commits already covered by that review a
 `✓` in the inline selector.
 (Bitbucket does not record which commit an approval covered, so that preselection does not apply
 there.)
+The inline comment editor scrolls into view when opened or when it grows, including wrapped text,
+with one row below it. Deleting lines leaves the scroll position in place.
+
 Use `:summary` during a review to show every pending local-draft comment. The summary replaces the
 diff while leaving the file sidebar visible when it is open. The first
 comment is selected when the view opens; use `j`/`k` to select the next or previous comment, and

@@ -946,6 +946,7 @@ impl App {
     }
 
     pub fn exit_comment_mode(&mut self) {
+        self.comment_input_previous_height = None;
         self.input_mode = InputMode::Normal;
         self.comment_buffer.clear();
         self.comment_cursor = 0;

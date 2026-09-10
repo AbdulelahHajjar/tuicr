@@ -1183,15 +1183,20 @@ pub(super) fn render_unified_diff(frame: &mut Frame, app: &mut App, area: Rect) 
         line_idx += 1;
     }
 
-    // Auto-scroll so the comment input box stays visible while the user types.
-    // Without this, adding a comment near the bottom/top of the viewport would
-    // place the input box off-screen and the user couldn't see what they type.
     scroll_comment_input_into_view(
         &mut app.diff_state.scroll_offset,
+        &mut app.comment_input_previous_height,
         comment_input_box_range,
         comment_cursor_logical_line,
         inner.height as usize,
         lines.len(),
+        |index| {
+            if app.diff_state.wrap_lines && inner.width > 0 {
+                crate::ui::text_utils::wrap_spans(&lines[index].spans, inner.width as usize).len()
+            } else {
+                1
+            }
+        },
     );
 
     let visible_lines_unscrolled: Vec<Line> = lines

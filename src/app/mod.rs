@@ -1401,6 +1401,8 @@ pub struct App {
     /// Calculated screen position for comment input cursor (col, row) for IME positioning.
     /// Set during render when in Comment mode, None otherwise.
     pub comment_cursor_screen_pos: Option<(u16, u16)>,
+    /// Last rendered editor height; reset when comment editing ends.
+    pub comment_input_previous_height: Option<usize>,
     /// During render, the comment input box may introduce lines that have no corresponding
     /// entry in `line_annotations`. This field stores `(box_start, box_len, annotations_replaced)`
     /// where `box_start` is the absolute rendered line index where the input box begins,

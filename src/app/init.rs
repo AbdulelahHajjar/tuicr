@@ -602,6 +602,7 @@ impl App {
             pending_stdout_output: None,
             comment_cursor_screen_pos: None,
             comment_input_annotation_offset: None,
+            comment_input_previous_height: None,
             update_info: None,
             pending_count: None,
             review_commits: Vec::new(),

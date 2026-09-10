@@ -338,52 +338,55 @@ pub(super) fn comment_type_presentation(
     }
 }
 
-/// Adjust scroll_offset so the comment input box is visible in the viewport.
-///
-/// The input box is rendered inline in the diff view, so without this
-/// adjustment it can end up below (or above) the visible area when a
-/// comment is started near the viewport edge or when typing a multi-line
-/// comment grows the box past the bottom. If the box is taller than the
-/// viewport we fall back to keeping just the text cursor line visible.
+/// Reveal an opening or growing editor, reserving one screen row below it.
+/// Oversized editors follow the text cursor because the whole box cannot fit.
 pub(super) fn scroll_comment_input_into_view(
     scroll_offset: &mut usize,
+    previous_height: &mut Option<usize>,
     box_range: Option<(usize, usize)>,
     cursor_line: Option<usize>,
     viewport_height: usize,
     total_lines: usize,
+    mut row_height: impl FnMut(usize) -> usize,
 ) {
     let Some((box_start, box_end)) = box_range else {
+        *previous_height = None;
         return;
     };
     if viewport_height == 0 {
         return;
     }
 
-    let box_height = box_end.saturating_sub(box_start) + 1;
-
-    if box_height <= viewport_height {
-        if box_start < *scroll_offset {
-            *scroll_offset = box_start;
-        } else if box_end >= *scroll_offset + viewport_height {
-            *scroll_offset = box_end + 1 - viewport_height;
-        }
-    } else if let Some(cursor) = cursor_line {
-        // Box too tall for viewport: keep the text cursor line visible.
-        if cursor < *scroll_offset {
-            *scroll_offset = cursor;
-        } else if cursor >= *scroll_offset + viewport_height {
-            *scroll_offset = cursor + 1 - viewport_height;
-        }
+    let box_height: usize = (box_start..=box_end).map(&mut row_height).sum();
+    let opening = previous_height.is_none();
+    let growing = previous_height.is_some_and(|height| box_height > height);
+    *previous_height = Some(box_height);
+    if !opening && !growing {
+        return;
     }
 
-    // Clamp so we never scroll past the last line. This must match
-    // `App::max_scroll_offset`, which allows empty space below the content:
-    // clamping to `total_lines - viewport_height` instead would undo a `zz`
-    // centering near EOF every frame the input box is rendered.
-    let max_scroll = total_lines.saturating_sub(1);
-    if *scroll_offset > max_scroll {
-        *scroll_offset = max_scroll;
+    let padding = usize::from(viewport_height > 1);
+    let target = if box_height + padding <= viewport_height {
+        box_end
+    } else {
+        cursor_line.unwrap_or(box_end)
+    };
+    if opening && box_start < *scroll_offset {
+        *scroll_offset = box_start;
     }
+    if target >= *scroll_offset {
+        let mut rows = padding;
+        let mut first_visible = target;
+        for index in (*scroll_offset..=target).rev() {
+            rows += row_height(index);
+            if rows > viewport_height {
+                break;
+            }
+            first_visible = index;
+        }
+        *scroll_offset = (*scroll_offset).max(first_visible);
+    }
+    *scroll_offset = (*scroll_offset).min(total_lines.saturating_sub(1));
 }
 
 /// Populates `out` with the visual-row -> annotation-index map for the diff
@@ -1142,11 +1145,139 @@ mod tests {
     use super::*;
 
     #[test]
+    fn should_scroll_only_on_open_and_growth() {
+        let mut scroll = 0;
+        let mut previous = None;
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut previous,
+            Some((8, 10)),
+            Some(9),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 2);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut previous,
+            Some((8, 15)),
+            Some(14),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 7);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut previous,
+            Some((8, 10)),
+            Some(9),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 7);
+        // Manual scrolling remains intact on redraw and cursor movement.
+        scroll = 20;
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut previous,
+            Some((8, 10)),
+            Some(8),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 20);
+        scroll_comment_input_into_view(&mut scroll, &mut previous, None, None, 10, 100, |_| 1);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut previous,
+            Some((8, 10)),
+            Some(9),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 8);
+    }
+
+    #[test]
+    fn should_count_wrapped_code_above_editor() {
+        let mut scroll = 0;
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((5, 7)),
+            Some(6),
+            10,
+            100,
+            |index| if index < 5 { 3 } else { 1 },
+        );
+        assert_eq!(scroll, 3);
+    }
+
+    #[test]
+    fn should_preserve_padding_when_box_touches_bottom() {
+        let mut scroll = 0;
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((7, 9)),
+            Some(8),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 1);
+    }
+
+    #[test]
+    fn should_not_scroll_back_when_oversized_editor_shrinks_to_fit() {
+        let mut scroll = 20;
+        let mut previous = Some(30);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut previous,
+            Some((5, 8)),
+            Some(6),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 20);
+    }
+
+    #[test]
+    fn should_reveal_cursor_in_single_row_viewport() {
+        let mut scroll = 0;
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((5, 8)),
+            Some(6),
+            1,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 6);
+    }
+
+    #[test]
     fn should_not_scroll_when_comment_box_already_visible() {
         // given: box at lines 5-7, viewport shows lines 0-9
         let mut scroll = 0;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((5, 7)), Some(6), 10, 100);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((5, 7)),
+            Some(6),
+            10,
+            100,
+            |_| 1,
+        );
         // then
         assert_eq!(scroll, 0);
     }
@@ -1156,9 +1287,16 @@ mod tests {
         // given: box at lines 20-22, viewport shows lines 0-9
         let mut scroll = 0;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((20, 22)), Some(21), 10, 100);
-        // then: scroll so box_end (22) is the last visible line => scroll = 22 - 10 + 1 = 13
-        assert_eq!(scroll, 13);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((20, 22)),
+            Some(21),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 14);
     }
 
     #[test]
@@ -1166,8 +1304,15 @@ mod tests {
         // given: box at lines 5-7, viewport shows lines 20-29
         let mut scroll = 20;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((5, 7)), Some(6), 10, 100);
-        // then: scroll so box_start (5) is the first visible line
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((5, 7)),
+            Some(6),
+            10,
+            100,
+            |_| 1,
+        );
         assert_eq!(scroll, 5);
     }
 
@@ -1176,9 +1321,16 @@ mod tests {
         // given: box spans 20 lines, viewport only 10 lines
         let mut scroll = 0;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((30, 49)), Some(45), 10, 100);
-        // then: scroll so cursor (45) is the last visible line => scroll = 45 - 10 + 1 = 36
-        assert_eq!(scroll, 36);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((30, 49)),
+            Some(45),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 37);
     }
 
     #[test]
@@ -1186,7 +1338,15 @@ mod tests {
         // given: scroll already past max (e.g., content shrank)
         let mut scroll = 200;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((95, 97)), Some(96), 10, 100);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((95, 97)),
+            Some(96),
+            10,
+            100,
+            |_| 1,
+        );
         // then: pulled back so the box is the first visible line
         assert_eq!(scroll, 95);
     }
@@ -1196,7 +1356,15 @@ mod tests {
         // given: a box range beyond the rendered content
         let mut scroll = 0;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((150, 152)), Some(151), 10, 100);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((150, 152)),
+            Some(151),
+            10,
+            100,
+            |_| 1,
+        );
         // then: clamped to max_scroll = 100 - 1 = 99, matching App::max_scroll_offset
         assert_eq!(scroll, 99);
     }
@@ -1207,7 +1375,15 @@ mod tests {
         // leaving blank rows below the content, then a 4-line input box opened
         let mut scroll = 78;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((99, 102)), Some(100), 40, 104);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((99, 102)),
+            Some(100),
+            40,
+            104,
+            |_| 1,
+        );
         // then: the box is already visible, so the centering must survive
         assert_eq!(scroll, 78);
     }
@@ -1217,7 +1393,7 @@ mod tests {
         // given
         let mut scroll = 42;
         // when
-        scroll_comment_input_into_view(&mut scroll, None, None, 10, 100);
+        scroll_comment_input_into_view(&mut scroll, &mut None, None, None, 10, 100, |_| 1);
         // then
         assert_eq!(scroll, 42);
     }
@@ -1227,8 +1403,15 @@ mod tests {
         // given: viewport shows 0-9, box starts at 8 and ends at 10 (footer off-screen)
         let mut scroll = 0;
         // when
-        scroll_comment_input_into_view(&mut scroll, Some((8, 10)), Some(9), 10, 100);
-        // then: scroll so box_end (10) is visible => scroll = 10 - 10 + 1 = 1
-        assert_eq!(scroll, 1);
+        scroll_comment_input_into_view(
+            &mut scroll,
+            &mut None,
+            Some((8, 10)),
+            Some(9),
+            10,
+            100,
+            |_| 1,
+        );
+        assert_eq!(scroll, 2);
     }
 }

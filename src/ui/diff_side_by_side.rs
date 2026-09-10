@@ -1004,13 +1004,27 @@ pub(super) fn render_side_by_side_diff(frame: &mut Frame, app: &mut App, area: R
     drop(ctx);
     app.comment_input_annotation_offset = annotation_offset;
 
-    // Auto-scroll so the comment input box stays visible while the user types.
     scroll_comment_input_into_view(
         &mut app.diff_state.scroll_offset,
+        &mut app.comment_input_previous_height,
         comment_input_box_range,
         comment_cursor_logical_line,
         inner.height as usize,
         lines.len(),
+        |index| {
+            if app.diff_state.wrap_lines && content_width > 0 {
+                if let Some(meta) = sbs_meta.get(&index) {
+                    wrap_spans(&meta.left_content, content_width)
+                        .len()
+                        .max(wrap_spans(&meta.right_content, content_width).len())
+                        .max(1)
+                } else {
+                    wrap_spans(&lines[index].spans, inner.width as usize).len()
+                }
+            } else {
+                1
+            }
+        },
     );
 
     let visible_lines_unscrolled: Vec<Line> = lines
