@@ -132,7 +132,7 @@ Shown below the file tree when local comments or visible remote PR threads exist
 | Key | Action |
 |-----|--------|
 | `r` | Toggle file reviewed |
-| `R` | Toggle hunk reviewed |
+| `R` | Toggle hunk reviewed; marking reviewed advances to the next hunk |
 | `c` | Add a line comment; on a thread or line comment, inherit its line/range and diff side |
 | `C` | Add file comment |
 | `<leader>c` | Add review comment |
@@ -143,6 +143,10 @@ Shown below the file tree when local comments or visible remote PR threads exist
 | `e` | Open focused file in `$EDITOR` |
 | `y` | Copy review to clipboard |
 | `Y` | Copy the comment at cursor to clipboard |
+
+Marking a hunk reviewed with `R` moves to the next hunk, crossing file boundaries and
+skipping hidden files and files without hunks. This works in both continuous and single-file
+views. Unmarking a hunk keeps the cursor on it; marking the final hunk also stays in place.
 
 `e` opens the file at the cursor's line. Terminal editors (`vim`, `nvim`, `nano`, …)
 take over the screen and tuicr reloads the diff once they exit. Windowed editors

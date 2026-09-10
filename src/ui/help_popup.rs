@@ -522,7 +522,7 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
                 "  R         ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw("Toggle hunk reviewed"),
+            Span::raw("Toggle hunk reviewed; advance when marked"),
         ]),
         Line::from(vec![
             Span::styled(

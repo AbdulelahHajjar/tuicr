@@ -378,9 +378,46 @@ impl App {
         self.ensure_cursor_visible();
 
         if reviewed {
+            self.advance_after_hunk_review(file_idx, hunk_idx);
             self.set_message("Hunk marked reviewed");
         } else {
             self.set_message("Hunk marked unreviewed");
+        }
+    }
+
+    fn advance_after_hunk_review(&mut self, file_idx: usize, hunk_idx: usize) {
+        let next =
+            self.diff_files
+                .iter()
+                .enumerate()
+                .skip(file_idx)
+                .find_map(|(candidate_idx, file)| {
+                    if !self.file_passes_filter(file)
+                        || self.should_collapse_file(candidate_idx)
+                        || file.is_binary
+                        || file.is_too_large
+                    {
+                        return None;
+                    }
+                    let next_hunk = if candidate_idx == file_idx {
+                        hunk_idx + 1
+                    } else {
+                        0
+                    };
+                    (next_hunk < file.hunks.len()).then_some((candidate_idx, next_hunk))
+                });
+        let Some((next_file, next_hunk)) = next else {
+            return;
+        };
+        self.primed_walk_next = false;
+        self.primed_walk_prev = false;
+        self.down_released_since_arm = false;
+        self.up_released_since_arm = false;
+        if next_file != file_idx {
+            self.jump_to_file(next_file);
+        }
+        if let Some(header) = self.hunk_header_line(next_file, next_hunk) {
+            self.move_cursor_to_annotation(header);
         }
     }
 
