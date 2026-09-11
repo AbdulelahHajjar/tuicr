@@ -81,6 +81,50 @@ fn build_app() -> App {
 }
 
 #[test]
+fn comment_line_delete_preserves_other_lines_and_text_after_cursor() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let keys = [
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::SUPER),
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::META),
+    ];
+    let cases = [
+        ("line 1\nline 2\nline 3|", "line 1\nline 2\n|"),
+        ("line 1\nleft|right\nline 3", "line 1\n|right\nline 3"),
+        ("left|right\nline 2\nline 3", "|right\nline 2\nline 3"),
+        ("line 1\nline 2\n|", "line 1\nline 2\n|"),
+        ("line 1\n|line 2\nline 3", "line 1\n|line 2\nline 3"),
+        ("أول\nثان\nحذف🙂|يبقى\nآخر", "أول\nثان\n|يبقى\nآخر"),
+        ("|", "|"),
+    ];
+    for key in keys {
+        for (before, after) in cases {
+            let mut app = build_app();
+            app.input_mode = InputMode::Comment;
+            app.comment_cursor = before.find('|').unwrap();
+            app.comment_buffer = before.replace('|', "");
+            let action = crate::input::map_key_to_action(key, app.input_mode, app.leader_key);
+
+            crate::handler::handle_comment_action(&mut app, action.clone());
+
+            assert_eq!(
+                app.comment_buffer,
+                after.replace('|', ""),
+                "{key:?}: {before:?}"
+            );
+            assert_eq!(app.comment_cursor, after.find('|').unwrap());
+            assert_eq!(app.input_mode, InputMode::Comment);
+
+            crate::handler::handle_comment_action(&mut app, action);
+
+            assert_eq!(app.comment_buffer, after.replace('|', ""));
+            assert_eq!(app.comment_cursor, after.find('|').unwrap());
+        }
+    }
+}
+
+#[test]
 fn comment_vim_command_line_q_cancels_w_saves() {
     let mut app = build_app();
     app.comment_vim_enabled = true;

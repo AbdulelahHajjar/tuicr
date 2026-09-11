@@ -522,7 +522,7 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
                 "  R         ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw("Toggle hunk reviewed; all hunks complete the file"),
+            Span::raw("Toggle hunk reviewed; advance to next unreviewed"),
         ]),
         Line::from(vec![
             Span::styled(
@@ -627,6 +627,7 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
         comment_mode_row("Ctrl-A/E", "Line start/end"),
         comment_mode_row("Ctrl/Alt-Left/Right", "Word left/right"),
         comment_mode_row("Cmd-Left/Right", "Line start/end (macOS)"),
+        comment_mode_row("Ctrl-U/Cmd-Backspace", "Delete to line start"),
         comment_mode_row("Esc/Ctrl-C", "Cancel"),
         comment_mode_row(
             "comment_vim",
@@ -1075,6 +1076,7 @@ mod tests {
             "Ctrl-A/E",
             "Ctrl/Alt-Left/Right",
             "Cmd-Left/Right",
+            "Ctrl-U/Cmd-Backspace",
             "Esc/Ctrl-C",
             "comment_vim",
         ];

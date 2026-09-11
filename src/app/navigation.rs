@@ -874,52 +874,30 @@ impl App {
         None
     }
 
-    /// Render-line indices of every visible hunk header. Respects
-    /// single-file view (only the current file's hunks) and the
-    /// reviewed-collapse behavior in multi-file view (skipped entirely)
-    /// versus single-file view (body rendered under a banner).
+    /// Hunk-header positions in the annotated diff, after layout and comment insertion.
     pub(in crate::app) fn hunk_positions(&self) -> Vec<usize> {
-        let single = self.is_single_file_view;
-        let current_idx = self.diff_state.current_file_idx;
-        let mut positions = Vec::new();
-        let mut cumulative = self.review_comments_render_height();
-        for (file_idx, file) in self.diff_files.iter().enumerate() {
-            if single && file_idx != current_idx {
-                continue;
-            }
-            if !self.file_passes_filter(file) {
-                continue;
-            }
-            let path = file.display_path();
-            let is_reviewed = self.session.is_file_reviewed(path);
+        self.line_annotations
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| {
+                matches!(line, AnnotatedLine::HunkHeader { .. }).then_some(idx)
+            })
+            .collect()
+    }
 
-            if !single {
-                cumulative += 1; // File header
-            }
-            if self.should_collapse_file(file_idx) {
-                // multi-file collapsed: no body, no trailing spacing
-                continue;
-            }
-            if single && is_reviewed {
-                cumulative += 1; // banner
-            }
-            if let Some(review) = self.session.files.get(path) {
-                cumulative += review.file_comments.len();
-            }
-            if file.is_binary || file.hunks.is_empty() {
-                cumulative += 1;
-            } else {
-                for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-                    positions.push(cumulative);
-                    cumulative += 1;
-                    if !self.should_collapse_hunk(file_idx, hunk_idx) {
-                        cumulative += hunk.lines.len();
-                    }
-                }
-            }
-            cumulative += 1; // trailing spacing or "next file" hint
+    fn move_to_hunk_header(&mut self, idx: usize) {
+        let Some(AnnotatedLine::HunkHeader { file_idx, .. }) = self.line_annotations.get(idx)
+        else {
+            return;
+        };
+        let file_idx = *file_idx;
+        if file_idx != self.diff_state.current_file_idx {
+            self.jump_to_file(file_idx);
         }
-        positions
+        self.move_cursor_to_annotation(idx);
+        if let Some(tree_idx) = self.file_idx_to_tree_idx(file_idx) {
+            self.file_list_state.select(tree_idx);
+        }
     }
 
     pub fn next_hunk(&mut self) {
@@ -931,9 +909,7 @@ impl App {
         self.up_released_since_arm = false;
         for pos in self.hunk_positions() {
             if pos > self.diff_state.cursor_line {
-                self.diff_state.cursor_line = pos;
-                self.ensure_cursor_visible();
-                self.update_current_file_from_cursor();
+                self.move_to_hunk_header(pos);
                 return;
             }
         }
@@ -941,16 +917,17 @@ impl App {
         // into the next file's first hunk so `]` can step the codebase
         // hunk-by-hunk without breaking on file boundaries.
         if self.is_single_file_view {
-            // Step over files hidden by a file-tree filter: they render
-            // nothing, so landing on one would show an empty pane.
-            let next_idx = ((self.diff_state.current_file_idx + 1)..self.diff_files.len())
-                .find(|&idx| self.file_idx_passes_filter(idx));
+            // Hidden files and files without hunks are not navigation targets.
+            let next_idx =
+                ((self.diff_state.current_file_idx + 1)..self.diff_files.len()).find(|&idx| {
+                    self.file_idx_passes_filter(idx)
+                        && !self.diff_files[idx].is_binary
+                        && !self.diff_files[idx].hunks.is_empty()
+                });
             if let Some(next_idx) = next_idx {
                 self.jump_to_file(next_idx);
                 if let Some(&first) = self.hunk_positions().first() {
-                    self.diff_state.cursor_line = first;
-                    self.ensure_cursor_visible();
-                    self.update_current_file_from_cursor();
+                    self.move_to_hunk_header(first);
                 }
             }
         }
@@ -964,9 +941,7 @@ impl App {
         let positions = self.hunk_positions();
         for &pos in positions.iter().rev() {
             if pos < self.diff_state.cursor_line {
-                self.diff_state.cursor_line = pos;
-                self.ensure_cursor_visible();
-                self.update_current_file_from_cursor();
+                self.move_to_hunk_header(pos);
                 return;
             }
         }
@@ -974,15 +949,15 @@ impl App {
         // previous file's last hunk so `[` keeps stepping backward across
         // files.
         if self.is_single_file_view
-            && let Some(prev_idx) = (0..self.diff_state.current_file_idx)
-                .rev()
-                .find(|&idx| self.file_idx_passes_filter(idx))
+            && let Some(prev_idx) = (0..self.diff_state.current_file_idx).rev().find(|&idx| {
+                self.file_idx_passes_filter(idx)
+                    && !self.diff_files[idx].is_binary
+                    && !self.diff_files[idx].hunks.is_empty()
+            })
         {
             self.jump_to_file(prev_idx);
             if let Some(&last) = self.hunk_positions().last() {
-                self.diff_state.cursor_line = last;
-                self.ensure_cursor_visible();
-                self.update_current_file_from_cursor();
+                self.move_to_hunk_header(last);
                 return;
             }
         }

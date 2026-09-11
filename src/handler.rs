@@ -1215,8 +1215,10 @@ pub fn handle_comment_action(app: &mut App, action: Action) {
             app.comment_cursor = delete_word_before(&mut app.comment_buffer, app.comment_cursor);
         }
         Action::ClearLine => {
-            app.comment_buffer.clear();
-            app.comment_cursor = 0;
+            let start = comment_line_start(&app.comment_buffer, app.comment_cursor);
+            app.comment_buffer
+                .replace_range(start..app.comment_cursor, "");
+            app.comment_cursor = start;
         }
         Action::Quit => app.should_quit = true,
         _ => {}

@@ -416,19 +416,33 @@ impl App {
                 .enumerate()
                 .skip(file_idx)
                 .find_map(|(candidate_idx, file)| {
+                    let review = self.session.files.get(file.display_path());
                     if !self.file_passes_filter(file)
-                        || self.should_collapse_file(candidate_idx)
+                        || review.is_some_and(|review| review.reviewed)
                         || file.is_binary
                         || file.is_too_large
                     {
                         return None;
                     }
-                    let next_hunk = if candidate_idx == file_idx {
+                    let mut next_hunk = if candidate_idx == file_idx {
                         start_hunk
                     } else {
                         0
                     };
-                    (next_hunk < file.hunks.len()).then_some((candidate_idx, next_hunk))
+                    if next_hunk >= file.hunks.len() {
+                        return None;
+                    }
+                    if let Some(review) = review.filter(|review| !review.reviewed_hunks.is_empty())
+                    {
+                        next_hunk = file
+                            .hunk_review_keys()
+                            .iter()
+                            .enumerate()
+                            .skip(next_hunk)
+                            .find(|(_, key)| !review.reviewed_hunks.contains(*key))
+                            .map(|(idx, _)| idx)?;
+                    }
+                    Some((candidate_idx, next_hunk))
                 });
         let Some((next_file, next_hunk)) = next else {
             return false;

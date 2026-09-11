@@ -108,6 +108,8 @@ and diff side. Outdated threads without a valid current anchor cannot supply a t
 
 The inline comment editor scrolls into view when opened or when it grows, including wrapped text,
 with one row below it. Deleting lines leaves the scroll position in place.
+In the default editor, `Cmd-Backspace` or `Ctrl-u` deletes to the start of the current line,
+preserving the rest of the draft.
 
 Use `:summary` during a review to show every pending local-draft comment. The summary replaces the
 diff while leaving the file sidebar visible when it is open. The first
@@ -345,7 +347,7 @@ A first-session cheatsheet. Press `?` inside tuicr for the full reference.
 | `c` / `C` | Add line / file comment |
 | `v` / `V` | Visual mode (range comment) |
 | `r` | Toggle file reviewed |
-| `R` | Toggle hunk reviewed; marking reviewed advances to the next hunk |
+| `R` | Toggle hunk reviewed; marking reviewed advances to the next unreviewed hunk |
 | `e` | Open focused file in `$EDITOR` |
 | `y` | Copy review to clipboard |
 | `:edit` | Open focused file in `$EDITOR` |

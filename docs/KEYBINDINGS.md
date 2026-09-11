@@ -132,7 +132,7 @@ Shown below the file tree when local comments or visible remote PR threads exist
 | Key | Action |
 |-----|--------|
 | `r` | Toggle file reviewed |
-| `R` | Toggle hunk reviewed; marking reviewed advances to the next hunk |
+| `R` | Toggle hunk reviewed; marking reviewed advances to the next unreviewed hunk |
 | `c` | Add a line comment; on a thread or line comment, inherit its line/range and diff side |
 | `C` | Add file comment |
 | `<leader>c` | Add review comment |
@@ -144,12 +144,13 @@ Shown below the file tree when local comments or visible remote PR threads exist
 | `y` | Copy review to clipboard |
 | `Y` | Copy the comment at cursor to clipboard |
 
-Marking a hunk reviewed with `R` moves to the next hunk, crossing file boundaries and
-skipping hidden files and files without hunks. This works in both continuous and single-file
-views. Once all hunks in a file are reviewed, the file is marked reviewed too, regardless
-of the order you reviewed them. Unmarking a hunk also clears the file's reviewed mark.
-If no later hunk remains, the cursor stays on the completed file, or moves to a remaining
-visible file when reviewed files are hidden.
+Marking a hunk reviewed with `R` moves to the next unreviewed hunk, crossing file boundaries
+and skipping reviewed files, hidden files, and files without hunks. This works in both
+continuous and single-file views. Once all hunks in a file are reviewed, the file is marked
+reviewed too, regardless of the order you reviewed them. Unmarking a hunk also clears the
+file's reviewed mark.
+If no later unreviewed hunk remains, the cursor stays on the current hunk or its completed
+file, or moves to a remaining visible file when reviewed files are hidden.
 
 `e` opens the file at the cursor's line. Terminal editors (`vim`, `nvim`, `nano`, …)
 take over the screen and tuicr reloads the diff once they exit. Windowed editors
@@ -174,9 +175,12 @@ override `$EDITOR`.
 | `Enter` / `Ctrl-Enter` / `Ctrl-s` | Save comment |
 | `Shift-Enter` / `Ctrl-j` | Insert newline |
 | `←` / `→` | Move cursor |
-| `Ctrl-w` / `Alt-Backspace` / `Cmd-Backspace` | Delete word |
-| `Ctrl-u` | Clear line |
+| `Ctrl-w` / `Alt-Backspace` | Delete word |
+| `Ctrl-u` / `Cmd-Backspace` | Delete to the start of the current line |
 | `Esc` / `Ctrl-c` | Cancel |
+
+`Ctrl-u` and `Cmd-Backspace` preserve other lines, the newline before the current line,
+and any text after the cursor. At the start of a line, they do nothing.
 
 On a Local pull request, saving a new line or range comment opens a forge thread immediately,
 authored as the config `username`; file and review comments stay drafts. If the write fails the

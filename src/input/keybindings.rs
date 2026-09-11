@@ -380,12 +380,11 @@ fn map_comment_mode(key: KeyEvent) -> Action {
         (KeyCode::Right, KeyModifiers::NONE) => Action::TextCursorRight,
         // Editing
         (KeyCode::Backspace, mods)
-            if mods.contains(KeyModifiers::ALT)
-                || mods.contains(KeyModifiers::SUPER)
-                || mods.contains(KeyModifiers::META) =>
+            if mods.contains(KeyModifiers::SUPER) || mods.contains(KeyModifiers::META) =>
         {
-            Action::DeleteWord
+            Action::ClearLine
         }
+        (KeyCode::Backspace, mods) if mods.contains(KeyModifiers::ALT) => Action::DeleteWord,
         (KeyCode::Backspace, KeyModifiers::NONE) => Action::DeleteChar,
         (KeyCode::Char('w'), KeyModifiers::CONTROL) => Action::DeleteWord,
         (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::ClearLine,

@@ -324,6 +324,116 @@ fn should_advance_after_reviewing_hunks_within_and_across_files() {
 }
 
 #[test]
+fn should_skip_reviewed_hunks_after_reviewing_within_and_across_files() {
+    for single in [false, true] {
+        for mode in [DiffViewMode::Unified, DiffViewMode::SideBySide] {
+            for show_reviewed in [false, true] {
+                let files = vec![
+                    make_file_with_hunks(
+                        "a.rs",
+                        vec![
+                            make_hunk(1, 3),
+                            make_hunk(10, 2),
+                            make_hunk(20, 3),
+                            make_hunk(30, 2),
+                        ],
+                    ),
+                    make_file_with_hunks("b.rs", vec![make_hunk(1, 3)]),
+                    make_file_with_hunks("c.rs", vec![make_hunk(1, 3)]),
+                    make_file_with_hunks("nested/d.rs", vec![make_hunk(1, 3), make_hunk(20, 2)]),
+                ];
+                let mut app = build_app_with_files(files, 50);
+                for (file_idx, hunk_idx) in [(0, 1), (0, 3), (2, 0), (3, 0)] {
+                    let file = &app.diff_files[file_idx];
+                    let key = file.hunk_review_key(hunk_idx).unwrap();
+                    app.session
+                        .get_file_mut(file.display_path())
+                        .unwrap()
+                        .reviewed_hunks
+                        .insert(key);
+                }
+                app.session
+                    .get_file_mut(&PathBuf::from("b.rs"))
+                    .unwrap()
+                    .reviewed = true;
+                app.is_single_file_view = single;
+                app.diff_view_mode = mode;
+                app.diff_state.viewport_height = 4;
+                app.set_show_reviewed(show_reviewed);
+                app.rebuild_annotations();
+                app.diff_state.cursor_line = app.hunk_header_line(0, 0).unwrap();
+
+                for (file, hunk, next_file, next_hunk) in [(0, 0, 0, 2), (0, 2, 3, 1)] {
+                    crate::handler::handle_diff_action(
+                        &mut app,
+                        crate::input::Action::ToggleHunkReviewed,
+                    );
+                    assert!(app.is_hunk_reviewed(file, hunk));
+                    assert!(!app.is_hunk_reviewed(next_file, next_hunk));
+                    assert_eq!(app.diff_state.current_file_idx, next_file);
+                    assert_eq!(
+                        app.diff_state.cursor_line,
+                        app.hunk_header_line(next_file, next_hunk).unwrap()
+                    );
+                    assert_eq!(
+                        app.file_list_state.selected(),
+                        app.file_idx_to_tree_idx(next_file).unwrap()
+                    );
+                    assert!(app.diff_state.scroll_offset <= app.diff_state.cursor_line);
+                }
+                assert!(app.session.is_file_reviewed(&PathBuf::from("a.rs")));
+                for (file, hunk) in [(0, 1), (0, 3), (2, 0), (3, 0)] {
+                    assert!(app.is_hunk_reviewed(file, hunk));
+                }
+                assert!(!app.is_hunk_reviewed(1, 0));
+            }
+        }
+    }
+}
+
+#[test]
+fn should_stay_on_current_hunk_when_no_later_unreviewed_hunk_remains() {
+    for single in [false, true] {
+        for mode in [DiffViewMode::Unified, DiffViewMode::SideBySide] {
+            let files = vec![
+                make_file_with_hunks(
+                    "a.rs",
+                    vec![make_hunk(1, 3), make_hunk(10, 2), make_hunk(20, 3)],
+                ),
+                make_file_with_hunks("b.rs", vec![make_hunk(1, 3)]),
+            ];
+            let mut app = build_app_with_files(files, 50);
+            let key = app.diff_files[0].hunk_review_key(2).unwrap();
+            app.session
+                .get_file_mut(&PathBuf::from("a.rs"))
+                .unwrap()
+                .reviewed_hunks
+                .insert(key);
+            app.session
+                .get_file_mut(&PathBuf::from("b.rs"))
+                .unwrap()
+                .reviewed = true;
+            app.is_single_file_view = single;
+            app.diff_view_mode = mode;
+            app.rebuild_annotations();
+            app.diff_state.cursor_line = app.hunk_header_line(0, 1).unwrap();
+
+            app.toggle_hunk_reviewed();
+
+            assert!(app.is_hunk_reviewed(0, 1));
+            assert!(app.is_hunk_reviewed(0, 2));
+            assert!(!app.is_hunk_reviewed(0, 0));
+            assert!(!app.session.is_file_reviewed(&PathBuf::from("a.rs")));
+            assert_eq!(app.diff_state.current_file_idx, 0);
+            assert_eq!(
+                app.diff_state.cursor_line,
+                app.hunk_header_line(0, 1).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
 fn should_keep_cursor_on_hunk_when_marking_it_unreviewed() {
     let file = make_file_with_hunks("a.rs", vec![make_hunk(1, 3), make_hunk(10, 2)]);
     let mut app = build_app_with_files(vec![file], 20);
@@ -1611,4 +1721,123 @@ fn should_not_show_eof_gap_for_deleted_files() {
 
     // and: total_lines must match annotations
     assert_eq!(app.total_lines(), app.line_annotations.len());
+}
+
+#[test]
+fn should_navigate_to_actual_hunk_headers_with_gaps_comments_and_paired_lines() {
+    for single in [false, true] {
+        for mode in [DiffViewMode::Unified, DiffViewMode::SideBySide] {
+            for expanded in [false, true] {
+                let mut first_hunk = make_hunk(10, 3);
+                first_hunk.lines[0].origin = LineOrigin::Deletion;
+                first_hunk.lines[0].new_lineno = None;
+                first_hunk.lines[1].origin = LineOrigin::Addition;
+                first_hunk.lines[1].old_lineno = None;
+                let files = vec![
+                    make_file_with_hunks("a.rs", vec![first_hunk, make_hunk(30, 2)]),
+                    make_file_with_hunks("nested/b.rs", vec![make_hunk(20, 2)]),
+                ];
+                let mut app = build_app_with_files(files, 50);
+                app.is_single_file_view = single;
+                app.diff_view_mode = mode;
+                app.diff_state.viewport_height = 5;
+                app.diff_state.viewport_width = 40;
+                app.diff_state.wrap_lines = true;
+                let review = app.session.get_file_mut(&PathBuf::from("a.rs")).unwrap();
+                review.file_comments.push(Comment::new(
+                    "A long file comment that wraps across several rows.\nAnother line."
+                        .to_string(),
+                    CommentType::None,
+                    None,
+                ));
+                review.line_comments.insert(
+                    12,
+                    vec![Comment::new(
+                        "Line comment\nwith more than one row".to_string(),
+                        CommentType::None,
+                        Some(LineSide::New),
+                    )],
+                );
+                app.rebuild_annotations();
+                if expanded {
+                    app.expand_gap(
+                        GapId {
+                            file_idx: 0,
+                            hunk_idx: 1,
+                        },
+                        ExpandDirection::Both,
+                        None,
+                    )
+                    .unwrap();
+                }
+                let first = app.hunk_header_line(0, 0).unwrap();
+                let second = app.hunk_header_line(0, 1).unwrap();
+                app.diff_state.cursor_line = first;
+                app.next_hunk();
+                assert_eq!(
+                    app.diff_state.cursor_line, second,
+                    "single={single}, mode={mode:?}, expanded={expanded}"
+                );
+                app.prev_hunk();
+                assert_eq!(app.diff_state.cursor_line, first);
+                app.next_hunk();
+                app.next_hunk();
+                assert_eq!(app.diff_state.current_file_idx, 1);
+                assert_eq!(
+                    app.diff_state.cursor_line,
+                    app.hunk_header_line(1, 0).unwrap()
+                );
+                assert_eq!(
+                    app.file_list_state.selected(),
+                    app.file_idx_to_tree_idx(1).unwrap()
+                );
+                app.prev_hunk();
+                assert_eq!(app.diff_state.current_file_idx, 0);
+                assert_eq!(
+                    app.diff_state.cursor_line,
+                    app.hunk_header_line(0, 1).unwrap()
+                );
+                assert_eq!(
+                    app.file_list_state.selected(),
+                    app.file_idx_to_tree_idx(0).unwrap()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn should_skip_hidden_and_hunkless_files_in_both_hunk_navigation_directions() {
+    for single in [false, true] {
+        let mut binary = make_file_with_hunks("c.bin", Vec::new());
+        binary.is_binary = true;
+        let files = vec![
+            make_file_with_hunks("a.rs", vec![make_hunk(10, 2)]),
+            make_file_with_hunks("b.rs", vec![make_hunk(10, 2)]),
+            binary,
+            make_file_with_hunks("d.rs", Vec::new()),
+            make_file_with_hunks("e.rs", vec![make_hunk(20, 2)]),
+        ];
+        let mut app = build_app_with_files(files, 50);
+        app.session
+            .get_file_mut(&PathBuf::from("b.rs"))
+            .unwrap()
+            .reviewed = true;
+        app.is_single_file_view = single;
+        app.set_show_reviewed(false);
+        app.rebuild_annotations();
+        app.diff_state.cursor_line = app.hunk_header_line(0, 0).unwrap();
+        app.next_hunk();
+        assert_eq!(app.diff_state.current_file_idx, 4);
+        assert_eq!(
+            app.diff_state.cursor_line,
+            app.hunk_header_line(4, 0).unwrap()
+        );
+        app.prev_hunk();
+        assert_eq!(app.diff_state.current_file_idx, 0);
+        assert_eq!(
+            app.diff_state.cursor_line,
+            app.hunk_header_line(0, 0).unwrap()
+        );
+    }
 }
