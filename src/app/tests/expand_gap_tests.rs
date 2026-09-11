@@ -310,7 +310,8 @@ fn should_advance_after_reviewing_hunks_within_and_across_files() {
                 assert_eq!(app.diff_state.current_file_idx, next_file);
                 assert_eq!(
                     app.diff_state.cursor_line,
-                    app.hunk_header_line(next_file, next_hunk).unwrap()
+                    app.hunk_header_line(next_file, next_hunk)
+                        .unwrap_or_else(|| app.calculate_file_scroll_offset(next_file))
                 );
                 assert_eq!(
                     app.file_list_state.selected(),
@@ -366,6 +367,79 @@ fn should_skip_hidden_files_and_files_without_hunks_after_reviewing() {
 }
 
 #[test]
+fn should_complete_file_only_after_every_current_hunk_is_reviewed() {
+    let file = make_file_with_hunks("a.rs", vec![make_hunk(1, 3), make_hunk(10, 2)]);
+    let mut app = build_app_with_files(vec![file], 20);
+    let path = PathBuf::from("a.rs");
+    app.session
+        .get_file_mut(&path)
+        .unwrap()
+        .reviewed_hunks
+        .insert("stale-key".to_string());
+    app.diff_state.cursor_line = app.hunk_header_line(0, 1).unwrap();
+    app.toggle_hunk_reviewed();
+    assert!(!app.session.is_file_reviewed(&path));
+    app.diff_state.cursor_line = app.hunk_header_line(0, 0).unwrap();
+    app.toggle_hunk_reviewed();
+    assert!(app.session.is_file_reviewed(&path));
+    assert_eq!(app.reviewed_count(), 1);
+
+    app.is_single_file_view = true;
+    app.rebuild_annotations();
+    app.diff_state.cursor_line = app.hunk_header_line(0, 0).unwrap();
+    app.toggle_hunk_reviewed();
+    assert!(!app.session.is_file_reviewed(&path));
+    assert_eq!(app.reviewed_count(), 0);
+    assert!(app.is_hunk_reviewed(0, 1));
+}
+
+#[test]
+fn should_leave_completed_file_when_hunks_are_reviewed_out_of_order_in_single_file_view() {
+    let files = vec![
+        make_file_with_hunks("a.rs", vec![make_hunk(1, 3), make_hunk(10, 2)]),
+        make_file_with_hunks("b.rs", vec![make_hunk(1, 2)]),
+    ];
+    let mut app = build_app_with_files(files, 20);
+    app.is_single_file_view = true;
+    app.rebuild_annotations();
+    app.diff_state.cursor_line = app.hunk_header_line(0, 1).unwrap();
+    app.toggle_hunk_reviewed();
+    app.jump_to_file(0);
+    app.diff_state.cursor_line = app.hunk_header_line(0, 0).unwrap();
+    app.toggle_hunk_reviewed();
+    assert!(app.session.is_file_reviewed(&PathBuf::from("a.rs")));
+    assert_eq!(app.diff_state.current_file_idx, 1);
+    assert_eq!(
+        app.diff_state.cursor_line,
+        app.hunk_header_line(1, 0).unwrap()
+    );
+}
+
+#[test]
+fn should_finish_hidden_review_queue_when_last_hunk_completes_last_file() {
+    for single in [false, true] {
+        let file = make_file_with_hunks("a.rs", vec![make_hunk(1, 3)]);
+        let mut app = build_app_with_files(vec![file], 20);
+        app.is_single_file_view = single;
+        app.set_show_reviewed(false);
+        app.rebuild_annotations();
+        app.diff_state.cursor_line = app.hunk_header_line(0, 0).unwrap();
+        app.toggle_hunk_reviewed();
+        assert!(app.filtered_file_indices().is_empty());
+        assert_eq!(app.reviewed_count(), 1);
+        assert_eq!(app.diff_state.cursor_line, 0);
+        assert_eq!(app.diff_state.scroll_offset, 0);
+        assert!(
+            app.message
+                .as_ref()
+                .unwrap()
+                .content
+                .starts_with("All files reviewed")
+        );
+    }
+}
+
+#[test]
 fn should_toggle_hunk_reviewed_from_header() {
     let file = make_file_with_hunks("test.rs", vec![make_hunk(1, 3)]);
     let mut app = build_app_with_files(vec![file], 20);
@@ -378,14 +452,11 @@ fn should_toggle_hunk_reviewed_from_header() {
     assert!(app.session.is_hunk_reviewed(&path, &key));
     assert_eq!(
         app.message.as_ref().unwrap().content,
-        "Hunk marked reviewed"
+        "All hunks reviewed; file marked reviewed"
     );
     assert!(matches!(
         app.line_annotations[app.diff_state.cursor_line],
-        AnnotatedLine::HunkHeader {
-            file_idx: 0,
-            hunk_idx: 0
-        }
+        AnnotatedLine::FileHeader { file_idx: 0 }
     ));
 }
 
@@ -474,7 +545,7 @@ fn should_fold_reviewed_hunk_body() {
 }
 
 #[test]
-fn should_keep_file_and_hunk_reviewed_state_independent() {
+fn should_preserve_hunk_marks_when_manually_unreviewing_completed_file() {
     let file = make_file_with_hunks("test.rs", vec![make_hunk(1, 3)]);
     let mut app = build_app_with_files(vec![file], 20);
     let path = app.diff_files[0].display_path().clone();
@@ -484,7 +555,7 @@ fn should_keep_file_and_hunk_reviewed_state_independent() {
     app.toggle_hunk_reviewed();
     app.toggle_reviewed_for_file_idx(0, false);
 
-    assert!(app.session.is_file_reviewed(&path));
+    assert!(!app.session.is_file_reviewed(&path));
     assert!(app.session.is_hunk_reviewed(&path, &key));
 }
 

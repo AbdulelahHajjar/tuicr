@@ -80,7 +80,7 @@ when tuicr restarts, but they survive a `:e` reload.
 ### Hiding reviewed files
 
 `:set noreviewed` / `:set reviewed` / `:set reviewed!` (or the bare `:reviewed`)
-hide or show files already marked reviewed with `r`. There is deliberately no
+hide or show files marked reviewed with `r` or by completing every hunk with `R`. There is deliberately no
 single-key binding: `H` is a vim motion, and this is a command-only feature. Like
 `i` / `e`, hidden files leave the tree, the diff pane, `{`/`}` and `[`/`]`
 navigation, `/` search, and the `+/-` counts in the header — so the header reports
@@ -89,8 +89,8 @@ the diff still left to review.
 Two things stay deliberately unaffected. The tree title keeps counting reviewed
 files in its `reviewed/total` fraction, since scoping it to the visible rows would
 collapse it to `0/n` exactly when progress matters most; the bottom border carries
-a `reviewed hidden` cue instead. And a file whose hunks are individually marked
-with `R` is not hidden — only the file-level `r` flag counts.
+a `reviewed hidden` cue instead. Marking every hunk with `R` also marks the file
+reviewed, so the file disappears when reviewed files are hidden.
 
 While hiding, `r` becomes a burn-down loop: marking the file you are reading moves
 you to the next unreviewed file, wrapping at the end. A hidden file cannot be
@@ -146,7 +146,10 @@ Shown below the file tree when local comments or visible remote PR threads exist
 
 Marking a hunk reviewed with `R` moves to the next hunk, crossing file boundaries and
 skipping hidden files and files without hunks. This works in both continuous and single-file
-views. Unmarking a hunk keeps the cursor on it; marking the final hunk also stays in place.
+views. Once all hunks in a file are reviewed, the file is marked reviewed too, regardless
+of the order you reviewed them. Unmarking a hunk also clears the file's reviewed mark.
+If no later hunk remains, the cursor stays on the completed file, or moves to a remaining
+visible file when reviewed files are hidden.
 
 `e` opens the file at the cursor's line. Terminal editors (`vim`, `nvim`, `nano`, …)
 take over the screen and tuicr reloads the diff once they exit. Windowed editors

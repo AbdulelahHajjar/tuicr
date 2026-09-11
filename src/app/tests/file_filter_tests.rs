@@ -679,10 +679,8 @@ fn should_toggle_reviewed_visibility_via_the_bare_reviewed_command() {
 }
 
 #[test]
-fn should_not_hide_a_file_whose_hunks_are_merely_all_hunk_reviewed() {
+fn should_hide_a_file_after_all_its_hunks_are_reviewed() {
     let mut app = app_with(&["a.rs", "b.rs"]);
-    // `R` on every hunk is not the same as `r` on the file: only the
-    // file-level flag hides.
     let a = index_of(&app, "a.rs");
     app.jump_to_file(a);
     app.toggle_hunk_reviewed();
@@ -693,5 +691,5 @@ fn should_not_hide_a_file_whose_hunks_are_merely_all_hunk_reviewed() {
 
     app.set_show_reviewed(false);
 
-    assert_eq!(visible_paths(&app), vec!["a.rs", "b.rs"]);
+    assert_eq!(visible_paths(&app), vec!["b.rs"]);
 }

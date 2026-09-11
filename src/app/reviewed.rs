@@ -361,31 +361,55 @@ impl App {
             return;
         };
 
+        let hunk_keys = self.diff_files[file_idx].hunk_review_keys();
         let Some(review) = self.session.get_file_mut(&path) else {
             return;
         };
 
         let reviewed = review.toggle_hunk_reviewed(key);
+        let file_completed = reviewed
+            && hunk_keys
+                .iter()
+                .all(|key| review.reviewed_hunks.contains(key));
+        if file_completed || !reviewed {
+            review.reviewed = file_completed;
+            self.revealed_reviewed_file = None;
+        }
         self.dirty = true;
-        self.rebuild_annotations();
         self.diff_state.current_file_idx = file_idx;
-        if let Some(tree_idx) = self.file_idx_to_tree_idx(file_idx) {
-            self.file_list_state.select(tree_idx);
+        self.rebuild_annotations();
+        if self.file_idx_passes_filter(file_idx) {
+            if let Some(tree_idx) = self.file_idx_to_tree_idx(file_idx) {
+                self.file_list_state.select(tree_idx);
+            }
+            self.diff_state.cursor_line = self
+                .hunk_header_line(file_idx, hunk_idx)
+                .unwrap_or_else(|| self.calculate_file_scroll_offset(file_idx));
+            self.ensure_cursor_visible();
         }
-        if let Some(header_line) = self.hunk_header_line(file_idx, hunk_idx) {
-            self.diff_state.cursor_line = header_line;
-        }
-        self.ensure_cursor_visible();
 
         if reviewed {
-            self.advance_after_hunk_review(file_idx, hunk_idx);
-            self.set_message("Hunk marked reviewed");
+            let next_hunk = if file_completed {
+                hunk_keys.len()
+            } else {
+                hunk_idx + 1
+            };
+            let advanced = self.advance_after_hunk_review(file_idx, next_hunk);
+            if !advanced && !self.file_idx_passes_filter(file_idx) {
+                self.advance_past_hidden_file(file_idx);
+                return;
+            }
+            self.set_message(if file_completed {
+                "All hunks reviewed; file marked reviewed"
+            } else {
+                "Hunk marked reviewed"
+            });
         } else {
             self.set_message("Hunk marked unreviewed");
         }
     }
 
-    fn advance_after_hunk_review(&mut self, file_idx: usize, hunk_idx: usize) {
+    fn advance_after_hunk_review(&mut self, file_idx: usize, start_hunk: usize) -> bool {
         let next =
             self.diff_files
                 .iter()
@@ -400,14 +424,14 @@ impl App {
                         return None;
                     }
                     let next_hunk = if candidate_idx == file_idx {
-                        hunk_idx + 1
+                        start_hunk
                     } else {
                         0
                     };
                     (next_hunk < file.hunks.len()).then_some((candidate_idx, next_hunk))
                 });
         let Some((next_file, next_hunk)) = next else {
-            return;
+            return false;
         };
         self.primed_walk_next = false;
         self.primed_walk_prev = false;
@@ -418,7 +442,9 @@ impl App {
         }
         if let Some(header) = self.hunk_header_line(next_file, next_hunk) {
             self.move_cursor_to_annotation(header);
+            return true;
         }
+        false
     }
 
     /// Files in the review population: everything surviving the `i`/`e`

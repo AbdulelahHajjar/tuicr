@@ -165,9 +165,10 @@ Repository-managed agent integrations:
   *population*, used by `file_count()`, `reviewed_count()`, and `/` search.
   `file_passes_filter()` is that plus `show_reviewed` — what is actually on screen. Scoping
   the counts to the visible rows would render the tree title's progress fraction as `0/n`
-  whenever reviewed files are hidden. Only the file-level `reviewed` flag hides: a file
-  whose hunks are individually `R`-marked stays visible (and `is_hunk_reviewed` hashes every
-  hunk in the file, so it must not be called speculatively).
+  whenever reviewed files are hidden. Only the file-level `reviewed` flag hides. Completing
+  every current hunk with `R` sets that flag; unmarking a hunk clears it. Test membership
+  against the current hunk keys, not the number of stored marks (which can include stale keys).
+  `is_hunk_reviewed` hashes every hunk in the file, so it must not be called speculatively.
 - `FileTreeFilter` has a hand-written `Default` because `show_reviewed` defaults to *true*;
   a derived `bool` default would silently boot with reviewed files hidden.
 - Marking a file reviewed while hiding deletes the row the cursor sits on, so

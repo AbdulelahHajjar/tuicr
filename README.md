@@ -15,7 +15,7 @@
 
 - GitHub-style continuous diff in the terminal. Scroll through every changed file in one stream.
 - PR-style comments at the line, range, file, and review level. 
-- Review tracking at file or hunk granularity, persisted across sessions.
+- Review tracking at file or hunk granularity, persisted across sessions. Reviewing every hunk automatically marks its file reviewed.
 - Three export targets: push a real review to GitHub, GitLab, Gitea, Bitbucket, Azure DevOps, or Gerrit, copy
   structured markdown to your clipboard, or pipe to stdout.
 - Works with git, jj, and mercurial. Reviews uncommitted changes, commit ranges, or any GitHub PR,
