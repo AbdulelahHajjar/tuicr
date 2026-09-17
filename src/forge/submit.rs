@@ -50,6 +50,19 @@ impl<'a> SubmitContext<'a> {
 
         comment_type.as_str()
     }
+
+    /// The configured `[TYPE] ` tag, omitted for untyped comments or when disabled.
+    pub(crate) fn comment_type_prefix(&self, comment_type: &CommentType) -> String {
+        if !self.forge.comment_type_prefix {
+            return String::new();
+        }
+        let label = self.type_label(comment_type);
+        if label.is_empty() {
+            String::new()
+        } else {
+            format!("[{label}] ")
+        }
+    }
 }
 
 /// Which forge review event a `:submit*` command corresponds to.
@@ -219,27 +232,13 @@ fn build_inline_body(comment: &Comment, file_level: bool, ctx: SubmitContext<'_>
     }
     // `None` comments carry no `[TYPE]` tag, but file-level ones keep the
     // `File-level:` marker so the reader still knows where the comment applies.
-    let label = ctx.type_label(&comment.comment_type);
-    let type_tag = if label.is_empty() {
-        String::new()
-    } else {
-        format!("[{label}] ")
-    };
+    let type_tag = ctx.comment_type_prefix(&comment.comment_type);
     let prefix = if file_level {
         format!("{type_tag}File-level: ")
     } else {
         type_tag
     };
     format!("{prefix}{body}", body = comment.content)
-}
-
-/// The `[TYPE] ` tag that precedes a comment body when `ForgeConfig`
-/// enables it. Empty for untyped comments or when the prefix is disabled.
-pub(crate) fn comment_type_prefix(comment_type: &CommentType, config: &ForgeConfig) -> String {
-    if !config.comment_type_prefix || comment_type.is_none() {
-        return String::new();
-    }
-    format!("[{ty}] ", ty = comment_type.as_str())
 }
 
 /// Where a local comment is anchored. The caller knows this from how it
@@ -587,10 +586,7 @@ pub fn build_review_body(
             if i > 0 {
                 block.push_str("\n\n");
             }
-            let label = ctx.type_label(&c.comment_type);
-            if ctx.forge.comment_type_prefix && !label.is_empty() {
-                block.push_str(&format!("[{label}] "));
-            }
+            block.push_str(&ctx.comment_type_prefix(&c.comment_type));
             block.push_str(&c.content);
         }
         sections.push(block);
@@ -599,12 +595,7 @@ pub fn build_review_body(
     if !moved_to_summary.is_empty() {
         let mut block = String::from("## Unplaced comments\n");
         for item in moved_to_summary {
-            let label = ctx.type_label(&item.comment.comment_type);
-            let prefix = if ctx.forge.comment_type_prefix && !label.is_empty() {
-                format!("[{label}] ")
-            } else {
-                String::new()
-            };
+            let prefix = ctx.comment_type_prefix(&item.comment.comment_type);
             let path = item.file.display();
             block.push_str(&format!(
                 "- {prefix}{path}: {body}\n",

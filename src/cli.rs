@@ -1166,6 +1166,38 @@ mod tests {
     }
 
     #[test]
+    fn should_keep_local_pr_invocation_with_named_remote() {
+        for (args, target) in [
+            (
+                vec!["tuicr", "pr", "--base", "main", "--remote", "upstream"],
+                None,
+            ),
+            (
+                vec![
+                    "tuicr",
+                    "--remote",
+                    "upstream",
+                    "tui",
+                    "pr",
+                    "feature/local-review",
+                    "--base",
+                    "develop",
+                ],
+                Some("feature/local-review"),
+            ),
+        ] {
+            let parsed = parse_for_test(&args).expect("local PR options should parse");
+            let invocation = parsed.pr.expect("local PR invocation");
+            assert_eq!(invocation.target.as_deref(), target);
+            assert_eq!(
+                invocation.base.as_deref(),
+                Some(if target.is_some() { "develop" } else { "main" })
+            );
+            assert_eq!(parsed.remote.as_deref(), Some("upstream"));
+        }
+    }
+
+    #[test]
     fn should_reject_remote_for_non_tui_commands() {
         for command in [vec!["review", "list"], vec!["update"]] {
             let mut args = vec!["tuicr", "--remote", "upstream"];

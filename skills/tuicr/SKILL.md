@@ -16,7 +16,8 @@ First decide which workflow the user is asking for:
 1. **User-led review of agent-generated changes**
    - The user wants to inspect the patch and write comments in tuicr.
    - Your job is to open or find the session, then retrieve the user's comments
-     with `tuicr review comments` when they say comments are ready. If you are
+     with `tuicr review comments` and, for a `local:` pull request,
+     `tuicr review threads` when they say comments are ready. If you are
      explicitly waiting while the user reviews, poll the same command
      periodically and look for new comment IDs.
    - Do not add your own review comments, do not preemptively review your own
@@ -82,8 +83,9 @@ When the user needs an interactive tuicr pane and no active session exists:
 | `$HERDR_ENV` is `1` | Run `tuicr-wrapper-herdr.sh /path/to/repo -- <scope>` |
 | None is set | Tell the user you are waiting for them to start `tuicr` in the repo, then attach with `tuicr review list` after they say it is ready |
 
-`<scope>` is `-w` for uncommitted working-tree changes or `-r <revset>` for a
-commit range — always pass one explicitly so the user is never left to pick
+`<scope>` is `-w` for uncommitted working-tree changes, `-r <revset>` for a
+commit range, or `pr [<branch>] [--base <ref>]` for a Local pull request.
+Always pass the intended scope explicitly so the user is never left to pick
 staged/unstaged/commit-range manually in the TUI.
 
 If more than one multiplexer marker is set, prefer the innermost multiplexer if
@@ -109,8 +111,9 @@ Herdr's JSON responses.
 
 Every wrapper accepts pass-through tuicr arguments after `--`, which is how
 you scope the review instead of leaving the scope selector for the user to
-fill in — for example `-- -w` for uncommitted working-tree changes or
-`-- -r <revset>` for a commit range. Always pass one of these explicitly when
+fill in — for example `-- -w` for uncommitted working-tree changes,
+`-- -r <revset>` for a commit range, or `-- pr --base main` for the current
+branch as a Local pull request. Always pass the intended scope explicitly when
 launching a review pane.
 
 If your tool supports command timeouts, use a long timeout, such as 10 minutes,
@@ -134,12 +137,21 @@ segment says which:
 | `staged/<head>` | `git diff --cached` |
 | `unstaged/<head>` | `git diff` |
 | `commits/<base>..<head>` | `git diff <base>~1..<head>` |
-| `pr/<n>` | `gh pr diff <n>` |
+| `gh:…/pr/<n>` | `gh pr diff <n>` |
+| `local:…/pr/<n>` | `git diff <base-ref>...<head-ref>` using the Local pull's stored references |
 | `pristine` | none; every tracked file shown in full |
 
 Range endpoints are inclusive and printed oldest-first, so `<base>` without
 `~1` drops the first commit. Check the file count against the listing row's
 `file_count`; a mismatch means every line number you derive will be wrong.
+
+For Local pull requests, obtain `base_ref` and `head_ref` from the matching
+record in tuicr's local-forge `pulls.json`; storage is documented in
+[`docs/LOCAL_FORGE.md`](../../docs/LOCAL_FORGE.md#the-store). Do not substitute
+the checkout's current branch: the user may be reviewing another branch.
+If the inline commit selector narrows the range, reproduce that range before
+choosing line anchors. Other forge prefixes need their own forge's diff;
+`gh pr diff` applies only to GitHub.
 
 ## Read User Comments
 
@@ -152,6 +164,19 @@ run:
 ```bash
 tuicr review comments --repo /path/to/repo --session <slug>
 ```
+
+For a `local:` pull request, also read its threads:
+
+```bash
+tuicr review threads --session local:owner/repo/pr/1
+```
+
+New inline comments on Local pull requests go straight to threads, so an
+empty `review comments` result can coexist with unresolved feedback. Thread
+comments carry `author` and `body`; each thread carries `is_resolved` and
+`updated_at`. While waiting, compare thread IDs and `updated_at` values to
+catch replies, edits, and resolution as well as new threads. File and review
+comments remain in `review comments` until submitted.
 
 The command emits JSON. Each comment includes fields like:
 
@@ -188,7 +213,9 @@ Only ask whether the user saved comments in the intended session, or whether
 another active session should be selected, when `reviewed_count` is less than
 `file_count` (the user quit before reviewing everything) or you can't find a
 `tuicr-summary:` line at all. If the review may have continued while you were
-working, rerun `tuicr review comments` before claiming completion.
+working, rerun `tuicr review comments` and the Local thread query, when
+applicable, before claiming completion. Check both before treating zero
+comments as a completed review with no feedback.
 
 ## Add Agent Comments
 
@@ -246,12 +273,13 @@ tuicr review add --session <slug> --username "Codex" --input \
   '{"file":"src/main.rs","line":42,"side":"new","comment_type":"issue","content":"Handle the empty case."}'
 ```
 
-Then verify. A line outside the diff stores, prints back, and exits 0, but
-never renders — invisible to the user, successful-looking to you. Re-read
-`tuicr review comments` and check each `start_line` exists on the side you gave
-(`new` for added or unchanged, `old` for removed). Check `author` to distinguish
-your comments from the user's, and keep the returned `id`s to identify the exact
-comments in later reads.
+Then verify. A line outside the diff can store and exit 0 without rendering.
+For session drafts, re-read `tuicr review comments` and check each `start_line`
+against its diff side (`new` for added or unchanged, `old` for removed). For
+Local inline threads, re-read `tuicr review threads` and check the stored
+`original_line`, optional `original_start_line`, and `side` (`RIGHT` or `LEFT`). Check
+`author` on each comment, and keep the returned IDs for later reads. A Local
+`review add` returns the thread ID at `.id` and comment IDs in `.comments[]`.
 
 ## Legacy Export Output
 
@@ -264,7 +292,8 @@ Older wrapper-driven flows may emit:
 ```
 
 If present, process those instructions. Otherwise prefer
-`tuicr review comments`; it is the primary source of review feedback. If the
+`tuicr review comments`, plus `tuicr review threads` for Local pull requests.
+These commands are the primary source of review feedback. If the
 wrapper mentions clipboard export, ask the user to paste it only when the CLI
 comments are unavailable.
 

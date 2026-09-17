@@ -14,6 +14,28 @@ This document is the contract for the implementation. Anything not stated
 here follows the conventions of the existing forge modules (see `AGENTS.md`,
 "Forge integration").
 
+## Upstream baseline and integration policy
+
+The `local-forge` branch is based on upstream `main` at
+[`d6441a1`](https://github.com/agavra/tuicr/commit/d6441a1886ae0a7bab8515fcbad62b8b6334e32e)
+(v0.26.0). Use upstream implementations for shared behavior when they cover
+the Local workflow. Keep the Local backend and its additional behavior until
+upstream supplies an equivalent.
+
+Shared upstream behavior includes Gitea and Gerrit integration, named remote
+selection with `--remote`, configured comment type labels in submitted
+reviews, comment authors in CLI output, and persisted review-state
+reconciliation after local diff reloads. Local thread creation uses the same
+label formatting as submitted reviews. Fresh launches at a new PR head also
+carry eligible drafts and review state from the previous session; this
+extends upstream's handling of reloads within an existing session.
+
+The fork retains offline branch review, direct thread creation and mutation,
+thread-store refresh, automatic branch following, cursor preservation across
+thread changes, comment-editor visibility, inherited line/range targets when
+pressing `c` on a comment, and `R` navigation and file completion. Open upstream
+proposals are not part of this baseline.
+
 ## Vocabulary
 
 - **Checkout** — the git working copy tuicr was started in (`std::env::current_dir()`
@@ -183,7 +205,8 @@ Re-anchoring never rewrites the store; `original_*` fields are immutable.
 tuicr pr                         # current branch as a local pull request
 tuicr pr <branch>                # another local branch
 tuicr pr --base <ref> [<branch>] # override the base branch (recorded on the pull)
-tuicr pr 125 | owner/repo#125 | <PR URL>   # unchanged: the origin forge's pull request
+tuicr pr 125 | owner/repo#125 | <PR URL>   # remote forge pull request
+tuicr pr 125 --remote upstream           # named remote's fetch URL
 ```
 
 `PrCommand.target` becomes `Option<String>`; `--base <REF>` is added. `CliArgs`
@@ -194,6 +217,10 @@ distinguishable from "no `pr` subcommand".
 The `mr` command remains forge-only with a required target and no `--base`
 option. `tuicr mr 125` and `tuicr tui mr 125` keep their existing routing,
 while a missing target or `--base` is rejected by clap.
+
+Remote forge targets retain upstream's `--remote` and `--repo-url` behavior.
+Those options do not change a Local pull request's checkout identity or base;
+use `--base` for its comparison reference.
 
 Target resolution in `App::new_from_pr_target…`:
 
@@ -293,14 +320,21 @@ once. No session draft is written and no `:submit` is needed for it. The
 anchor is the displayed diff: with the inline commit selector on a strict
 subset, `commit_id` is the subset's newest commit and `diff_start_sha` its
 parent, exactly as `:submit` maps drafts. A range comment anchors at its last
-line. If the write fails, the error is shown and the comment box stays open
-with its text; nothing falls back to a draft.
+line while retaining both endpoints. If the write fails, the error is shown
+and the comment box stays open with its text; nothing falls back to a draft.
+
+New thread bodies use upstream's configured comment type label, uppercased,
+for the `[TYPE]` prefix, in both the TUI and CLI. The CLI's `--type` accepts the
+type ID; the label is resolved from `comment_types`, with the uppercased ID
+as fallback. Type `none` and `[forge] comment_type_prefix = false` omit the
+prefix. Changing the label later does not rewrite existing thread bodies.
 
 File-level and review-level comments, edits of existing drafts, and comments
-on a closed pull keep the session-draft path; the verdict `:submit` folds them
-into the review body as before. `:summary`, `:clear`, and `:clearc` act on
-drafts only. `:submit approve` / `request-changes` / `comment` remain the way
-to record a verdict.
+on a closed pull keep the session-draft path. `:submit` maps file-level drafts
+to inline threads when an anchor is available and puts review-level drafts
+in the review body; unmappable drafts go through the resolver. `:summary`,
+`:clear`, and `:clearc` act on drafts only. `:submit approve` / `request-changes`
+/ `comment` remain the way to record a verdict on an open pull request.
 
 The CLI mirrors this: `tuicr review add --session local:… --target-file <path>
 --line <n>` opens a thread (see `docs/REVIEW_CLI.md`). `--repo` must point at
@@ -326,10 +360,17 @@ address any comment by id under the same author rule.
   edited so upstream rebases stay clean).
 - `tuicr update` exits non-zero with: `This is the local-forge fork build; update with tuicr-fork-update`.
 
+`tuicr-fork-update` is a separately managed helper, not a script bundled or
+installed by this repository. After updating the fork checkout, build and
+install it with `cargo install --path .`. Upstream package-manager releases
+do not include the Local forge extension.
+
 ## Documentation to keep in step
 
 `README.md` (a "Local pull requests" section under forge review; commands
-table), `docs/KEYBINDINGS.md` (`:resolve`, `:unresolve`), `docs/CONFIG.md`
+table), `docs/CLI.md` (Local targets and thread commands),
+`docs/REVIEW_CLI.md` (thread operations and JSON output),
+`docs/KEYBINDINGS.md` (`:resolve`, `:unresolve`), `docs/CONFIG.md`
 (`local_pr_follow_interval_ms`), `AGENTS.md` (module tree, key types, forge
 invariants — including that `Local` never calls a forge CLI or the network and that thread
 resolution exists only for `Local`), `src/ui/help_popup.rs`,

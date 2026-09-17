@@ -23,6 +23,23 @@
 
 ## Install
 
+Install this fork from the `local-forge` branch to get the Local pull request workflow:
+
+```bash
+git clone --branch local-forge https://github.com/AbdulelahHajjar/tuicr.git
+cd tuicr
+cargo install --path .
+```
+
+This build reports a `+local-forge` version suffix. It blocks `tuicr update` and directs
+you to `tuicr-fork-update`, a separately managed helper that this repository does not
+bundle. After updating your fork checkout, reinstall with `cargo install --path .`.
+
+<details>
+<summary>Install or update an upstream release</summary>
+
+These packages install upstream tuicr without the Local forge extension:
+
 ```bash
 curl -fsSL tuicr.dev/install.sh | sh
 # or
@@ -30,9 +47,6 @@ brew install tuicr
 # or
 sudo pacman -S tuicr
 ```
-
-<details>
-<summary>Other install methods (cargo, mise, nix, binaries, source)</summary>
 
 ```bash
 # Cargo
@@ -56,9 +70,7 @@ cd tuicr
 cargo install --path .
 ```
 
-</details>
-
-Update the active installation with one command:
+Update an upstream installation with one command:
 
 ```bash
 tuicr update
@@ -71,7 +83,8 @@ GitHub release asset after SHA-256 verification. Exact-version installs support 
 binaries; use the package manager's pinning workflow for Homebrew, Mise, or Nix. A `nix run`
 invocation is temporary rather than installed; rerun it to use the current flake, or use
 `nix profile install github:agavra/tuicr` for an installation that `tuicr update` can upgrade.
-The local-forge fork blocks `tuicr update`; update that build with `tuicr-fork-update`.
+
+</details>
 
 ## Quick start
 
@@ -90,8 +103,6 @@ tuicr tui pr 125            # GitHub PR via explicit TUI subcommand
 tuicr tui mr 125            # GitLab MR via explicit TUI subcommand
 tuicr --stdout              # Pipe the review to stdout
 tuicr review list           # List saved local review sessions
-tuicr update                # Update the active installation
-tuicr update 0.18.0         # Install a known-good version
 ```
 
 Every flag, environment variable, and exit code in [docs/CLI.md](docs/CLI.md).
@@ -131,8 +142,12 @@ picks up thread replies written by other processes, such as an agent's `tuicr re
 without `:e`. In the
 Pull Requests tab, press `l` to switch between Forge and Local branches. Use `:resolve` and
 `:unresolve` on a thread selected in the comment navigator or under the diff cursor. Line comments
-saved on a local pull request become threads immediately, so `:submit` only records the verdict;
-`dd` and `i` on your own thread delete or edit it.
+saved on a local pull request become threads immediately. `:submit` records the verdict
+and submits any pending draft comments. `dd` and `i` on your own thread delete or edit it.
+
+See [docs/LOCAL_FORGE.md](docs/LOCAL_FORGE.md) for storage, branch following, and the
+upstream integration policy, and [docs/REVIEW_CLI.md](docs/REVIEW_CLI.md#forge-threads-local-pull-requests)
+for agent replies, resolution, and editing.
 
 | Command | Action |
 |---------|--------|
@@ -250,8 +265,9 @@ tuicr --stdout | pbcopy
 ## Review session CLI
 
 `tuicr review` exposes saved sessions without opening the TUI. It can list
-sessions, add comments, and print stored comments for agent and script
-integrations. See [docs/REVIEW_CLI.md](docs/REVIEW_CLI.md).
+sessions, add comments, and print stored comments. For Local pull requests it
+also reads threads, posts replies, resolves threads, and edits or deletes the
+author's own comments. See [docs/REVIEW_CLI.md](docs/REVIEW_CLI.md).
 
 The TUI creates a persisted session file when a review target becomes active,
 so collaborative tools can add comments immediately. Empty auto-created session

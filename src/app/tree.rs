@@ -248,19 +248,17 @@ impl App {
             } else {
                 self.ensure_valid_tree_selection();
             }
-        } else {
-            if self.compact_folders {
-                // A compact row can contain closed intermediate directories,
-                // notably after collapse-all. Open the whole represented chain.
-                for ancestor in std::path::Path::new(dir_path).ancestors() {
-                    if !ancestor.as_os_str().is_empty() {
-                        self.expanded_dirs
-                            .insert(ancestor.to_string_lossy().into_owned());
-                    }
+        } else if self.compact_folders {
+            // A compact row can contain closed intermediate directories,
+            // notably after collapse-all. Open the whole represented chain.
+            for ancestor in std::path::Path::new(dir_path).ancestors() {
+                if !ancestor.as_os_str().is_empty() {
+                    self.expanded_dirs
+                        .insert(ancestor.to_string_lossy().into_owned());
                 }
-            } else {
-                self.expanded_dirs.insert(dir_path.to_string());
             }
+        } else {
+            self.expanded_dirs.insert(dir_path.to_string());
         }
     }
 

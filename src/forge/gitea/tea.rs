@@ -362,8 +362,7 @@ fn gitea_repository_from_path(host: &str, path: &str) -> Option<ForgeRepository>
 /// Handles the two forms that carry their own repository: a browser URL
 /// (`https://host/owner/repo/pulls/123`) and the host-qualified shorthand
 /// (`host/owner/repo#123`). Bare numbers are left to the GitHub parser, which
-/// runs first and produces a repository-less target that the caller then
-/// resolves against the detected remote.
+/// produces a repository-less target resolved against the detected remote.
 pub fn parse_pull_request_target_gitea(input: &str) -> Result<PullRequestTarget> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -1324,6 +1323,7 @@ fn group_comments_into_threads(comments: Vec<GiteaPullReviewComment>) -> Vec<Rem
             None => {
                 index.insert(key, threads.len());
                 threads.push(RemoteReviewThread {
+                    start_line: None,
                     id: format!(
                         "{}:{}:{}",
                         comment.path,
@@ -2251,6 +2251,7 @@ mod tests {
                 CreateReviewRequest {
                     event,
                     commit_id: "headsha",
+                    diff_start_sha: None,
                     body,
                     comments,
                 },
@@ -2350,6 +2351,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::RequestChanges,
                     commit_id: "headsha",
+                    diff_start_sha: None,
                     body: "   ",
                     comments: &[],
                 },
@@ -2368,6 +2370,7 @@ mod tests {
                 CreateReviewRequest {
                     event: SubmitEvent::Comment,
                     commit_id: "headsha",
+                    diff_start_sha: None,
                     body: "",
                     comments: &[],
                 },

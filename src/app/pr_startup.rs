@@ -15,13 +15,18 @@ pub(super) fn parse_forge_pr_target(
 ) -> Option<crate::forge::traits::PullRequestTarget> {
     use crate::forge::azure::az::parse_pull_request_target_azure;
     use crate::forge::bitbucket::bkt::parse_pull_request_target_bitbucket;
+    use crate::forge::gerrit::api::parse_pull_request_target_gerrit;
+    use crate::forge::gitea::tea::parse_pull_request_target_gitea;
     use crate::forge::github::gh::parse_pull_request_target;
     use crate::forge::gitlab::glab::parse_pull_request_target_gitlab;
 
+    // Gitea must recognize host-qualified shorthand before GitHub's catch-all.
     parse_pull_request_target_bitbucket(target)
+        .or_else(|_| parse_pull_request_target_gitea(target))
         .or_else(|_| parse_pull_request_target(target))
         .or_else(|_| parse_pull_request_target_gitlab(target))
         .or_else(|_| parse_pull_request_target_azure(target))
+        .or_else(|_| parse_pull_request_target_gerrit(target))
         .ok()
 }
 
@@ -140,6 +145,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::{parse_forge_pr_target, validate_pr_base_target};
+    use crate::forge::traits::ForgeRepository;
 
     #[test]
     fn should_classify_numeric_target_as_existing_forge_pr() {
@@ -151,7 +157,66 @@ mod tests {
 
     #[test]
     fn should_leave_branch_name_for_local_target_resolution() {
-        assert!(parse_forge_pr_target("feature/local-forge").is_none());
+        for branch in [
+            "main",
+            "feature/local-forge",
+            "feature/gitea",
+            "feature/gerrit",
+        ] {
+            assert!(parse_forge_pr_target(branch).is_none(), "{branch}");
+        }
+    }
+
+    #[test]
+    fn should_classify_gitea_targets_before_github_shorthand() {
+        for input in [
+            "https://gitea.example.com/team/service/pulls/42",
+            "gitea.example.com/team/service#42",
+        ] {
+            let target = parse_forge_pr_target(input).expect("Gitea pull request");
+
+            assert_eq!(target.number, 42);
+            assert_eq!(
+                target.repository,
+                Some(ForgeRepository::gitea(
+                    "gitea.example.com",
+                    "team",
+                    "service"
+                )),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn should_classify_gerrit_urls_as_remote_targets() {
+        let target = parse_forge_pr_target("https://gerrit.example.com/c/platform/base/+/3965/2")
+            .expect("Gerrit change");
+
+        assert_eq!(target.number, 3965);
+        assert_eq!(
+            target.repository,
+            Some(ForgeRepository::gerrit(
+                "gerrit.example.com",
+                "platform/base"
+            ))
+        );
+
+        let legacy = parse_forge_pr_target("https://gerrit.example.com/#/c/3965/")
+            .expect("legacy Gerrit change");
+        assert_eq!(legacy.number, 3965);
+        assert!(legacy.repository.is_none());
+    }
+
+    #[test]
+    fn should_keep_bare_repository_shorthand_on_github() {
+        let target = parse_forge_pr_target("team/service#42").expect("GitHub pull request");
+
+        assert_eq!(target.number, 42);
+        assert_eq!(
+            target.repository,
+            Some(ForgeRepository::github("github.com", "team", "service"))
+        );
     }
 
     #[test]

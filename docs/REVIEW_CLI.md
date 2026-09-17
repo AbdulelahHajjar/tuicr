@@ -210,13 +210,16 @@ PR slug:
 ```
 
 The `author` field is the username stored with the comment. It is present in
-the JSON emitted by both `review add` and `review comments`.
+the JSON emitted by both `review add` and `review comments`. Local thread
+output stores each comment's author in `comments[].author`; `reply` and `edit`
+return the affected comment with its `author`.
 
 ## Forge Threads (local pull requests)
 
-Submitted reviews on a `local:` pull request create forge threads that survive
-head changes; session drafts do not. Three commands let scripts and agents
-work that durable layer directly:
+Line and range comments on a `local:` pull request create forge threads
+immediately, and submitted inline drafts also become threads. These threads
+survive head changes and re-anchor to the current diff. The following commands
+let scripts and agents work with them directly:
 
 ```bash
 tuicr review threads --session local:owner/repo/pr/1
@@ -233,7 +236,7 @@ tuicr review delete  --session local:owner/repo/pr/1 --thread <id> [--comment <i
 `threads` prints every thread with its id, anchor, resolution state, and
 comments. Each thread's `updated_at` changes on every mutation — reply, edit,
 delete, resolve, unresolve — so a poller can compare that one field per thread. `reply` appends a comment to a thread and prints it. `resolve`
-flips `is_resolved` (`--unresolve` reopens). All three accept only `local:`
+flips `is_resolved` (`--unresolve` reopens). These thread commands accept only `local:`
 PR slugs; other forges return an error.
 
 `edit` replaces the body of a comment and prints it with `updated_at` set;
@@ -260,3 +263,9 @@ diff: a `--repo` that is not a directory, or a checkout of a different
 repository, is an error, and the file must be part of the diff. Threads
 created this way have `"review_id": null`; threads created by `:submit` carry
 their review's id. No session file is touched.
+
+The `[TYPE]` prefix in a new thread's body uses the configured comment type
+`label`, uppercased, matching upstream's submitted reviews. `--type` still
+takes the type ID. With no configured label, the ID is uppercased; type `none` and
+`[forge] comment_type_prefix = false` omit the prefix. Existing thread bodies
+keep their stored text when the configuration changes.

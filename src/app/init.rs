@@ -672,7 +672,7 @@ impl App {
     /// defaults to untyped comments with no `[TYPE]` prefix. Configuring types
     /// overrides that default (the first configured type becomes the default),
     /// but `None` stays available: it is appended so it can still be cycled to.
-    fn resolve_comment_types(
+    pub(crate) fn resolve_comment_types(
         comment_type_configs: Option<Vec<CommentTypeConfig>>,
     ) -> Vec<CommentTypeDefinition> {
         let Some(configs) = comment_type_configs else {
@@ -846,11 +846,6 @@ impl App {
     ) -> Result<Self> {
         use crate::forge::traits::ForgeKind;
 
-        // Bitbucket first: its URL shape (`/pull-requests/<n>`) is distinct,
-        // and the GitHub parser would otherwise claim the host. GitHub then
-        // handles numeric / `owner/repo#N` / GitHub URLs, GitLab handles
-        // `/-/merge_requests/<n>`, and an Azure DevOps PR URL falls through to
-        // the Azure parser last.
         let local_repo_root = std::env::current_dir().ok();
         let Some(parsed) = invocation
             .target

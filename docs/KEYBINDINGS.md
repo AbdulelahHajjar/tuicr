@@ -265,12 +265,12 @@ losing their reviewed state.
 
 Not every forge supports every event:
 
-| Event | GitHub | GitLab | Gitea | Bitbucket | Azure DevOps | Gerrit |
-|---|---|---|---|---|---|---|
-| `comment` | yes | yes | yes | yes | yes | yes |
-| `approve` | yes | yes | yes | yes | yes (vote +10) | yes (vote +2) |
-| `request-changes` | yes | yes | yes | no | yes (vote -10) | yes (vote -1) |
-| `draft` | yes | yes | yes | no | yes (plain comment) | yes |
+| Event | Local | GitHub | GitLab | Gitea | Bitbucket | Azure DevOps | Gerrit |
+|---|---|---|---|---|---|---|---|
+| `comment` | yes | yes | yes | yes | yes | yes | yes |
+| `approve` | yes | yes | yes | yes | yes | yes (vote +10) | yes (vote +2) |
+| `request-changes` | yes | yes | yes | yes | no | yes (vote -10) | yes (vote -1) |
+| `draft` | yes (pending review) | yes | yes | yes | no | yes (plain comment) | yes |
 
 Bitbucket rejects `request-changes` and `draft` up front rather than silently downgrading them.
 Azure DevOps has no pending-review primitive, so `draft` posts as a plain comment with no vote.
@@ -279,8 +279,10 @@ are no inline comments; inline comments alone do not satisfy it. GitLab `draft` 
 notes that the author publishes from GitLab's own "Submit review" UI. Gerrit `draft` stores draft
 comments that the author publishes from Gerrit's Reply UI.
 
-On Local pull requests inline comments are already threads, so `:submit` carries only the verdict
-and any review-level comment body.
+On Local pull requests, new inline comments are already threads. `:submit` records the verdict
+and submits pending drafts through the normal mapping: file comments become inline threads
+when an anchor is available, and review comments become the review body. Unmappable comments
+go through the resolver. `:submit draft` records a pending review; a later submission reuses it.
 
 `:resolve` and `:unresolve` target a selected remote thread in the comment navigator, a remote
 thread row under the diff cursor, or the first thread anchored to the diff line under the cursor.

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::forge::remote_comments::RemoteReviewComment;
-use crate::forge::submit::comment_type_prefix;
+use crate::forge::submit::SubmitContext;
 use crate::forge::traits::{CreateThreadRequest, ForgeKind, PullRequestDetails};
 
 impl App {
@@ -208,7 +208,8 @@ impl App {
         let diff_start_sha = pair.map(|(start, _)| start);
         let body = format!(
             "{}{content}",
-            comment_type_prefix(&self.comment_type, &self.forge_config)
+            SubmitContext::new(&self.forge_config, &self.comment_types)
+                .comment_type_prefix(&self.comment_type)
         );
         let backend = self.forge_backend.as_deref().ok_or_else(not_in_pr_mode)?;
         let thread = backend.create_thread(

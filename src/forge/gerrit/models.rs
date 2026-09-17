@@ -340,6 +340,7 @@ pub fn threads_from_comment_map(
                 None => {
                     thread_of.insert(id.clone(), threads.len());
                     threads.push(RemoteReviewThread {
+                        start_line: None,
                         id,
                         path: path.clone(),
                         line: comment.line,

@@ -14,20 +14,34 @@ Related references: [CONFIG.md](CONFIG.md) for the config file and themes,
 |---|---|
 | `tuicr` | Open the TUI on the review target selector |
 | `tuicr tui` | Same TUI, explicit subcommand |
-| `tuicr pr <target>` (`tuicr mr`) | Review a pull request / merge request |
-| `tuicr tui pr <target>` (`tuicr tui mr`) | Same, under the explicit TUI subcommand |
+| `tuicr pr [<target>] [--base <ref>]` | Review the current branch, another local branch, or a forge pull request |
+| `tuicr mr <target>` | Review a forge merge request; requires a target |
+| `tuicr tui pr [<target>]`, `tuicr tui mr <target>` | Same, under the explicit TUI subcommand |
 | `tuicr review list` | List persisted review sessions |
-| `tuicr review add` | Add a local draft comment to a session |
+| `tuicr review add` | Add a session draft, or open a Local pull request thread for a line/range target |
 | `tuicr review comments` (`tuicr review get`) | Print a session's comments |
-| `tuicr update [VERSION]` | Update the installed binary |
+| `tuicr review threads` | Print a Local pull request's stored threads |
+| `tuicr review reply` | Reply to a Local thread |
+| `tuicr review resolve` | Resolve a Local thread; `--unresolve` reopens it |
+| `tuicr review edit`, `tuicr review delete` | Edit or delete your own Local thread comment |
+| `tuicr update [VERSION]` | Exit with fork-specific update guidance |
 
-`mr` is an alias of `pr`, and `get` an alias of `comments`; they behave
-identically. `<target>` accepts a bare `<number>`, `<owner/repo#N>`, or a PR
-URL.
+`get` is an alias of `comments`. Both `pr` and `mr` accept a bare `<number>`,
+`<owner/repo#N>`, or a forge PR URL. `pr` also accepts a local branch name;
+omitting its target reviews the current branch as a Local pull request.
+`mr` requires a forge target and does not accept `--base`.
 
-`tuicr update` takes an optional SemVer version to install a specific release,
-including an older known-good one. It only accepts a version number — there is
-no `latest` keyword; omit the argument to get the newest release.
+For a Local pull request, `--base <ref>` overrides the default branch and
+records that base for the pull request. It must name a reference, such as
+`main` or `origin/main`; moving revision expressions such as `HEAD~2` are
+rejected. Combining `--base` with a forge target is an error. See
+[LOCAL_FORGE.md](LOCAL_FORGE.md) for default-base selection and persistence.
+
+This fork blocks `tuicr update`, including an optional version argument, so
+an upstream release cannot replace the Local workflow. It directs you to
+`tuicr-fork-update`, a separately managed helper that this repository does not
+bundle. Install from the fork's `local-forge` branch as described in
+[README.md](../README.md#install).
 
 There is no `tuicr help` subcommand. Use `-h` / `--help`, which also works per
 command (`tuicr review add --help`).
@@ -82,6 +96,9 @@ Both `--remote` and `--repo-url` select the repository directly, without a fork-
 lookup. They cannot be combined. When `--remote` is supplied, its lookup must
 succeed before a full PR URL or `owner/repo#N` target takes precedence. Omit
 `--remote` when using an explicit target outside a Git checkout.
+
+These options select a remote forge. Local pull requests keep their checkout's
+repository identity and use `--base` to select the comparison reference.
 
 ### Scope selection
 
@@ -154,12 +171,11 @@ nothing" apart from "quit without looking".
 TUI itself rendered to `/dev/tty`. Combined with the two stderr markers, that
 keeps stdout clean for a pipe.
 
-All three `tuicr review` subcommands print pretty JSON to stdout and nothing
+All `tuicr review` subcommands print pretty JSON to stdout and nothing
 else. There is no `--json` flag because JSON is the only format. See
 [REVIEW_CLI.md](REVIEW_CLI.md) for the schemas.
 
-`tuicr update` prints a single line describing what it did — updated, already
-up to date, or completed through an external package manager.
+`tuicr update` prints the fork update guidance to stderr and exits with code 1.
 
 ## Exit codes
 

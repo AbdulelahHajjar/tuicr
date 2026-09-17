@@ -12,7 +12,7 @@ use crate::error::{Result, TuicrError};
 use crate::forge::local::LocalForgeBackend;
 use crate::forge::local::store::{LocalForgeStore, LocalThread};
 use crate::forge::local::target::local_repository;
-use crate::forge::submit::{GhSide, comment_type_prefix};
+use crate::forge::submit::{GhSide, SubmitContext};
 use crate::forge::traits::{
     CreateThreadRequest, ForgeBackend, ForgeKind, ForgeRepository, PullRequestTarget,
 };
@@ -127,9 +127,33 @@ fn add_comment(
     out: &mut impl Write,
 ) -> Result<()> {
     let request_parts = build_add_request_parts(options)?;
+    let config = config::load_config()
+        .ok()
+        .and_then(|outcome| outcome.config);
+    add_comment_with_config(session, repo, request_parts, config.as_ref(), out)
+}
+
+fn add_comment_with_config(
+    session: &str,
+    repo: &Path,
+    request_parts: AddRequestParts,
+    config: Option<&config::AppConfig>,
+    out: &mut impl Write,
+) -> Result<()> {
+    let comment_type = CommentType::from_id(&request_parts.comment_type);
+    if let Some(warning) = unknown_comment_type_warning(&comment_type, config) {
+        eprintln!("{warning}");
+    }
+    let author = resolve_cli_author(request_parts.username, config);
     if let Some((repository, number)) = parse_local_pr_slug(session)
         && let Some((path, line, side)) = thread_anchor(&request_parts.target)
     {
+        let forge_config = config
+            .and_then(|config| config.forge.clone())
+            .unwrap_or_default();
+        let comment_types = crate::app::App::resolve_comment_types(
+            config.and_then(|config| config.comment_types.clone()),
+        );
         let thread = add_local_thread(
             session,
             repo,
@@ -143,10 +167,11 @@ fn add_comment(
                 path,
                 line,
                 side,
-                comment_type: &request_parts.comment_type,
+                comment_type: &comment_type,
                 content: &request_parts.content,
-                username: request_parts.username,
+                author: &author,
             },
+            SubmitContext::new(&forge_config, &comment_types),
         )?;
         serde_json::to_writer_pretty(&mut *out, &thread)?;
         writeln!(out)?;
@@ -155,15 +180,6 @@ fn add_comment(
     let store = ReviewStore::new();
     let session_ref = resolve_session_ref(&store, repo, session)?;
     let target = request_parts.target;
-    let comment_type = CommentType::from_id(&request_parts.comment_type);
-    // One config read serves both the type check and the author fallback.
-    let config = config::load_config()
-        .ok()
-        .and_then(|outcome| outcome.config);
-    if let Some(warning) = unknown_comment_type_warning(&comment_type, config.as_ref()) {
-        eprintln!("{warning}");
-    }
-    let author = resolve_cli_author(request_parts.username, config.as_ref());
     let comment = store.add_comment(
         &session_ref,
         AddCommentRequest {
@@ -483,9 +499,9 @@ struct LocalThreadInput<'a> {
     path: PathBuf,
     line: u32,
     side: LineSide,
-    comment_type: &'a str,
+    comment_type: &'a CommentType,
     content: &'a str,
-    username: Option<String>,
+    author: &'a str,
 }
 
 /// Open a thread on a local pull request straight in the forge store. The
@@ -497,6 +513,7 @@ fn add_local_thread(
     repository: ForgeRepository,
     number: u64,
     input: LocalThreadInput<'_>,
+    ctx: SubmitContext<'_>,
 ) -> Result<LocalThread> {
     if !repo.is_dir() {
         return Err(TuicrError::InvalidInput(format!(
@@ -520,17 +537,11 @@ fn add_local_thread(
         number,
         number.to_string(),
     ))?;
-    let forge_config = config::load_config()
-        .ok()
-        .and_then(|outcome| outcome.config)
-        .and_then(|config| config.forge)
-        .unwrap_or_default();
     let body = format!(
         "{}{}",
-        comment_type_prefix(&CommentType::from_id(input.comment_type), &forge_config),
+        ctx.comment_type_prefix(input.comment_type),
         input.content
     );
-    let author = resolve_cli_author(input.username);
     backend.create_local_thread(
         &details,
         &CreateThreadRequest {
@@ -539,7 +550,7 @@ fn add_local_thread(
             line: input.line,
             side: GhSide::from(input.side),
             body: &body,
-            author: Some(&author),
+            author: Some(input.author),
             commit_id: &details.head_sha,
             diff_start_sha: None,
         },
@@ -564,7 +575,10 @@ fn reply_to_forge_thread(
 ) -> Result<()> {
     let (repository, number) = local_pr_target(session)?;
     let store = LocalForgeStore::new(&repository)?;
-    let author = resolve_cli_author(username);
+    let config = config::load_config()
+        .ok()
+        .and_then(|outcome| outcome.config);
+    let author = resolve_cli_author(username, config.as_ref());
     let comment = store.reply_to_thread(number, thread, &author, content)?;
     serde_json::to_writer_pretty(&mut *out, &comment)?;
     writeln!(out)?;
@@ -581,7 +595,10 @@ fn edit_forge_thread_comment(
 ) -> Result<()> {
     let (repository, number) = local_pr_target(session)?;
     let store = LocalForgeStore::new(&repository)?;
-    let author = resolve_cli_author(username);
+    let config = config::load_config()
+        .ok()
+        .and_then(|outcome| outcome.config);
+    let author = resolve_cli_author(username, config.as_ref());
     let updated = store.update_thread_comment(number, thread, comment, &author, content)?;
     serde_json::to_writer_pretty(&mut *out, &updated)?;
     writeln!(out)?;
@@ -597,7 +614,10 @@ fn delete_forge_thread_comment(
 ) -> Result<()> {
     let (repository, number) = local_pr_target(session)?;
     let store = LocalForgeStore::new(&repository)?;
-    let author = resolve_cli_author(username);
+    let config = config::load_config()
+        .ok()
+        .and_then(|outcome| outcome.config);
+    let author = resolve_cli_author(username, config.as_ref());
     let (comment_id, thread_deleted) =
         store.delete_thread_comment(number, thread, comment, &author)?;
     serde_json::to_writer_pretty(
@@ -1095,6 +1115,78 @@ mod tests {
     }
 
     #[test]
+    fn should_apply_configured_labels_and_author_to_direct_local_threads() {
+        let (temp, checkout, _guard) = local_pull_fixture();
+        for (comment_type, prefix_enabled, username, expected_body, expected_author) in [
+            (
+                "issue",
+                true,
+                None,
+                "[⚠ NEEDS WORK] direct",
+                "Config Reviewer",
+            ),
+            ("issue", false, None, "direct", "Config Reviewer"),
+            ("none", true, None, "direct", "Config Reviewer"),
+            (
+                "unlisted",
+                true,
+                None,
+                "[UNLISTED] direct",
+                "Config Reviewer",
+            ),
+            (
+                "issue",
+                true,
+                Some(" Agent Reviewer "),
+                "[⚠ NEEDS WORK] direct",
+                "Agent Reviewer",
+            ),
+        ] {
+            let config = config::AppConfig {
+                username: Some(" Config Reviewer ".to_string()),
+                forge: Some(config::ForgeConfig {
+                    comment_type_prefix: prefix_enabled,
+                }),
+                comment_types: Some(vec![config::CommentTypeConfig {
+                    id: "issue".to_string(),
+                    label: Some("⚠ needs work".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            add_comment_with_config(
+                "local:owner/project/pr/1",
+                &checkout,
+                AddRequestParts {
+                    target: CommentTarget::Line {
+                        path: PathBuf::from("file.txt"),
+                        line: 2,
+                        side: LineSide::New,
+                    },
+                    comment_type: comment_type.to_string(),
+                    content: "direct".to_string(),
+                    username: username.map(str::to_string),
+                },
+                Some(&config),
+                &mut out,
+            )
+            .unwrap();
+
+            let printed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(printed["comments"][0]["body"], expected_body);
+            assert_eq!(printed["comments"][0]["author"], expected_author);
+            let threads = local_threads(&temp);
+            let stored = threads
+                .iter()
+                .find(|thread| thread.id == printed["id"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(stored.comments[0].body, expected_body);
+            assert_eq!(stored.comments[0].author, expected_author);
+        }
+    }
+
+    #[test]
     fn should_create_local_thread_from_json_input_target() {
         let (temp, checkout, _guard) = local_pull_fixture();
         let mut command = add_command(
@@ -1152,10 +1244,9 @@ mod tests {
             &mut out,
         )
         .unwrap();
-        let reply_id = serde_json::from_slice::<serde_json::Value>(&out).unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let reply = serde_json::from_slice::<serde_json::Value>(&out).unwrap();
+        assert_eq!(reply["author"], "Claude Fable");
+        let reply_id = reply["id"].as_str().unwrap().to_string();
         let edit = |comment: Option<&str>, username: &str, body: &str| ReviewCommand::Edit {
             session: slug.to_string(),
             thread: thread_id.clone(),
@@ -1179,6 +1270,7 @@ mod tests {
         .unwrap();
         let edited: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(edited["body"], "done in abc1234");
+        assert_eq!(edited["author"], "Claude Fable");
         assert!(!edited["updated_at"].is_null());
         let foreign =
             run_with_writer(edit(None, "Claude Fable", "rewrite"), &mut Vec::new()).unwrap_err();
